@@ -48,20 +48,22 @@ jobs:
           echo "Raw response:"
           cat resp.json
 
-          # tags を全部集めてユニーク化し、1行のJSON配列にする（例: ["4.16.2","5.5.0",...])
+          # tags を全部集めてユニーク化し、"latest" を除外する
           tags_json=$(jq -r '
             .[]
             | .metadata.container.tags[]?
+            | select(. != "latest")     # ← ★ ここで latest を除外
           ' resp.json 2>/dev/null | sort -u | jq -R . | jq -s -c .)
 
           if [ -z "$tags_json" ] || [ "$tags_json" = "[]" ]; then
-            echo "No tags found for ${GHCR_OWNER}/${GHCR_PACKAGE}."
+            echo "No non-latest tags found."
             echo 'tags=[]' >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Found tags: $tags_json"
+          echo "Found tags (excluding latest): $tags_json"
           echo "tags=$tags_json" >> "$GITHUB_OUTPUT"
+
 
   # =========================
   # 2) タグごとに Trivy スキャン
