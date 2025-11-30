@@ -2,7 +2,7 @@
 
 # Matomo for Azure App Service Rebuild
 
-This container image is designed specifically to run **Matomo 5.6.1** on **Azure App Service (Linux Containers)** with full compatibility for:
+This container image is designed specifically to run **Matomo** on **Azure App Service (Linux Containers)** with full compatibility for:
 
 - ✔ Azure Files persistent storage (config, plugins, tmp)
 - ✔ Automatic UID/GID sync for Azure Files (fixes PHP session issues)
@@ -146,4 +146,5 @@ If you want to connect without SSL, you must:
 1. Open the **Server parameters** for your Azure Database for MySQL instance
 2. Set the `require_secure_transport` parameter to **OFF**
 3. Save / apply the change
+
 
