@@ -1,0 +1,217 @@
+name: Scan ALL Matomo Image Tags
+
+permissions:
+  contents: read
+  packages: read
+  issues: write
+
+on:
+  schedule:
+    # 毎日 0:00 UTC 実行
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}
+
+env:
+  IMAGE_NAME: matomo-appservice-rebuild
+
+jobs:
+  # =========================
+  # 1) GHCR から全タグ一覧を取るジョブ
+  # =========================
+  fetch-tags:
+    runs-on: ubuntu-latest
+
+    outputs:
+      tags: ${{ steps.collect.outputs.tags }}
+
+    steps:
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
+
+      - name: Collect tags from GHCR
+        id: collect
+        env:
+          GHCR_OWNER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ secrets.PUSH_GITHUB_TOKEN }}
+          GHCR_PACKAGE: ${{ env.IMAGE_NAME }}
+        run: |
+          set -e
+
+          # users/ と orgs/ のどちらかで取れるように試す
+          base="https://api.github.com"
+          user_url="${base}/users/${GHCR_OWNER}/packages/container/${GHCR_PACKAGE}/versions?per_page=100"
+          org_url="${base}/orgs/${GHCR_OWNER}/packages/container/${GHCR_PACKAGE}/versions?per_page=100"
+
+          echo "Trying user endpoint: $user_url"
+          status=$(curl -sS -o resp.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${GHCR_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "$user_url")
+
+          if [ "$status" -eq 200 ]; then
+            echo "Fetched from users endpoint."
+          else
+            echo "User endpoint returned $status, trying org endpoint: $org_url"
+            status=$(curl -sS -o resp.json -w "%{http_code}" \
+              -H "Authorization: Bearer ${GHCR_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "$org_url")
+
+            if [ "$status" -ne 200 ]; then
+              echo "Failed to fetch GHCR package versions. HTTP status: $status"
+              cat resp.json || true
+              exit 1
+            fi
+          fi
+
+          cat resp.json
+
+          # tags を全部集めてユニーク化
+          tags_json=$(jq -r '
+            .[]
+            | .metadata.container.tags[]?
+          ' resp.json | sort -u | jq -R . | jq -s .)
+
+          if [ -z "$tags_json" ] || [ "$tags_json" = "[]" ]; then
+            echo "No tags found for ${GHCR_OWNER}/${GHCR_PACKAGE}."
+            # 空配列を返しておく（matrix が空なら scan ジョブはスキップされる）
+            echo 'tags=[]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found tags: $tags_json"
+          echo "tags=$tags_json" >> "$GITHUB_OUTPUT"
+
+  # =========================
+  # 2) タグごとに Trivy スキャン
+  # =========================
+  scan:
+    runs-on: ubuntu-latest
+    needs: fetch-tags
+
+    # タグごとに並列スキャン（fail-fast 無効）
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJson(needs.fetch-tags.outputs.tags) }}
+
+    steps:
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
+
+      - name: Show target image
+        run: |
+          echo "Scanning ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.PUSH_GITHUB_TOKEN }}
+
+      # Trivy スキャン（HIGH/CRITICALのみ）
+      - name: Scan image with Trivy
+        id: trivy
+        env:
+          GHCR_OWNER: ${{ github.repository_owner }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ matrix.tag }}
+        uses: aquasecurity/trivy-action@v0.24.0
+        with:
+          image-ref: ghcr.io/${{ env.GHCR_OWNER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: json
+          output: trivy.json
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+
+      # JSON -> 件数 & Markdownレポート生成
+      - name: Summarize vulnerabilities
+        id: summary
+        env:
+          GHCR_OWNER: ${{ github.repository_owner }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ matrix.tag }}
+        run: |
+          set -e
+
+          if [ ! -s trivy.json ]; then
+            echo "No trivy.json output. Skipping."
+            echo "total=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          total=$(jq '[.Results[].Vulnerabilities? // [] | length] | add // 0' trivy.json)
+          echo "Total HIGH/CRITICAL vulnerabilities: $total"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+
+          if [ "$total" -eq 0 ]; then
+            echo "No HIGH/CRITICAL vulnerabilities for tag ${IMAGE_TAG}."
+            exit 0
+          fi
+
+          jq -r '
+            .Results[]
+            | select(.Vulnerabilities != null)
+            | .Target as $target
+            | .Vulnerabilities[]
+            | select(.Severity == "HIGH" or .Severity == "CRITICAL")
+            | "| \($target) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \(.Severity) |"
+          ' trivy.json > table_rows.txt || true
+
+          cat <<EOF > trivy-report.md
+# Container vulnerability report for tag \`${IMAGE_TAG}\`
+
+- Image: \`ghcr.io/${GHCR_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}\`
+- Total HIGH/CRITICAL: **${total}**
+
+| Target | CVE | Package | Installed | Fixed | Severity |
+|--------|-----|---------|-----------|-------|----------|
+$(cat table_rows.txt)
+
+> This issue was generated automatically by a scheduled GitHub Actions workflow.
+EOF
+
+      # Issue 作成 or 追記（タグごと）
+      - name: Create or update issue for this tag
+        if: steps.summary.outputs.total != '0'
+        uses: actions/github-script@v7
+        env:
+          IMAGE_TAG: ${{ matrix.tag }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const tag = process.env.IMAGE_TAG;
+            const title = `[Security] Vulnerabilities found in GHCR image tag ${tag}`;
+            const body = fs.readFileSync('trivy-report.md', 'utf8');
+
+            // 同じタグ用のオープンIssueがあるか
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'container-security',
+            });
+
+            const existing = issues.find(i => i.title === title);
+
+            if (existing) {
+              core.info(`Existing issue #${existing.number} for tag ${tag}. Adding a comment.`);
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              core.info(`Creating new issue for tag ${tag}.`);
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['container-security', 'security', 'automated'],
+              });
+            }
