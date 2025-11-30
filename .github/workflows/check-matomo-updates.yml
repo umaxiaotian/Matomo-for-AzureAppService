@@ -2,14 +2,14 @@ name: Check Matomo Release and Create Issue
 
 permissions:
   contents: read
-  packages: read   # GHCR のバージョン一覧取得に必要
-  issues: write    # Issue 作成に必要
+  packages: read
+  issues: write
 
 on:
   schedule:
-    # 毎日 0:00 UTC に実行（1日おき監視のイメージでOK / 何もなければ何もしない）
+    # 毎日 0:00 UTC に実行
     - cron: "0 0 * * *"
-  workflow_dispatch: {}  # 手動実行もできるようにしておく
+  workflow_dispatch: {}
 
 env:
   IMAGE_NAME: matomo-appservice-rebuild
@@ -22,7 +22,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1) Matomo のリリースフィードから最新バージョンを取得
+      # 1) Matomo の RSS フィードから最新バージョンを取得
       - name: Get latest Matomo version from changelog feed
         id: matomo
         run: |
@@ -47,7 +47,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching existing GHCR versions for $GHCR_OWNER/${IMAGE_NAME} ..."
-          # ユーザーアカウント前提: /users/{owner}/packages/...
           resp=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -66,11 +65,11 @@ jobs:
           echo "Existing tags:"
           echo "$tags"
 
-          # 改行区切り → スペース区切り
+          # 改行 → スペース区切り
           tags_line=$(echo "$tags" | tr '\n' ' ')
           echo "tags=$tags_line" >> "$GITHUB_OUTPUT"
 
-      # 3) 新しいバージョンかどうか判定し、必要なら Issue を作成
+      # 3) 最新バージョンが GHCR に無ければ Issue を作成
       - name: Compare latest version with GHCR tags and create issue if needed
         env:
           LATEST: ${{ steps.matomo.outputs.latest }}
@@ -89,7 +88,6 @@ jobs:
 
           echo "Tag $LATEST not found in GHCR. Checking existing issues..."
 
-          # 同じタイトルの Issue が既にあるかチェック（重複 Issue 防止）
           issue_title="Matomo ${LATEST} is available"
           existing=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -105,21 +103,7 @@ jobs:
 
           echo "Creating new issue: $issue_title"
 
-          body=$(cat <<EOF
-A new Matomo version **${LATEST}** has been detected from the changelog feed.
-
-- Changelog feed: https://matomo.org/changelog/feed/
-- Current GHCR package: https://github.com/${REPO}/pkgs/container/${IMAGE_NAME}
-
-Please build and push the container image tag:
-
-\`\`\`
-ghcr.io/${REPO%%/*}/${IMAGE_NAME}:${LATEST}
-\`\`\`
-
-(Triggered automatically by check-matomo-release workflow.)
-EOF
-)
+          body="A new Matomo version ${LATEST} is available. Please check https://matomo.org/changelog/feed/ and update the container image if appropriate."
 
           curl -s -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
