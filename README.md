@@ -37,7 +37,7 @@ The container automatically consumes these variables through the entrypoint.
 Your App Service should mount Azure Files like this:
 
 | Share Name | Mount Path | Purpose |
-|------------|-------------|----------|
+|------------|------------|---------|
 | **config** | `/var/www/html/config` | Matomo config.ini.php persistence |
 | **plugins** | `/var/www/html/plugins` | Custom plugins, plugin persistence |
 | **tmp** | `/var/www/html/tmp` | Sessions, cache, logs |
@@ -48,9 +48,9 @@ and automatically updates the runtime `www-data` user to match.
 
 This prevents the common Matomo error:
 
-```
+```text
 Session data file is not created by your uid
-```
+````
 
 ---
 
@@ -58,22 +58,22 @@ Session data file is not created by your uid
 
 To override Matomo’s root `.htaccess`, simply upload:
 
-```
+```text
 /matomo_htaccess/.htaccess
 ```
 
 On startup, the container will copy it to:
 
-```
+```text
 /var/www/html/.htaccess
 ```
 
 This allows:
 
-- IP allowlists / denylists  
-- X-Forwarded-For based client filtering  
-- Reverse proxy rewrite rules  
-- Hardening rules  
+* IP allowlists / denylists
+* X-Forwarded-For based client filtering
+* Reverse proxy rewrite rules
+* Hardening rules
 
 ### Example .htaccess (restrict index.php to allowed IPs)
 
@@ -107,5 +107,19 @@ ssh root@localhost -p 2222
 Password: Docker!
 ```
 
+---
 
+## 5️⃣ Using Azure Database for MySQL (SSL / require_secure_transport)
 
+When using **Azure Database for MySQL** as the Matomo database backend, you may hit an error like:
+
+```text
+Connections using insecure transport are prohibited while --require_secure_transport=ON.
+```
+
+This image is configured for a **non-SSL** connection by default.
+If you want to connect without SSL, you must:
+
+1. Open the **Server parameters** for your Azure Database for MySQL instance
+2. Set the `require_secure_transport` parameter to **OFF**
+3. Save / apply the change
