@@ -1,4 +1,4 @@
-name: Build & Push Matomo Image (DockerHub)
+name: Build & Test & Push Matomo Image (DockerHub)
 
 on:
   # 手動実行用
@@ -17,14 +17,113 @@ env:
   IMAGE_NAME: matomo-appservice-rebuild
 
 jobs:
-  build-and-push:
+  # =========================
+  # 1) ビルド & テスト用ジョブ
+  # =========================
+  build-and-test:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 入力値から .env を生成（ローカル docker-compose と同じ形式）
+      # 入力値から .env を生成（必要ならローカル docker-compose でも使える）
+      - name: Generate .env file
+        run: |
+          cat <<EOF > .env
+          MATOMO_VERSION=${{ inputs.matomo_version }}
+          PHP_MEMORY_LIMIT=${{ inputs.php_memory_limit }}
+          EOF
+          echo ".env generated:"
+          cat .env
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # テスト用イメージのビルド（push しない / runner に load）
+      - name: Build image for test (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          build-args: |
+            MATOMO_VERSION=${{ inputs.matomo_version }}
+            PHP_MEMORY_LIMIT=${{ inputs.php_memory_limit }}
+          tags: |
+            matomo-test:${{ github.sha }}
+
+      # 簡易 PHP 拡張チェック
+      - name: Simple PHP extension check
+        run: |
+          set -e
+
+          echo "== php -m =="
+          docker run --rm matomo-test:${{ github.sha }} php -m
+
+          echo "== check required extensions =="
+          for ext in gd mysqli pdo_mysql bcmath zip redis apcu; do
+            echo "Checking extension: $ext"
+            if ! docker run --rm matomo-test:${{ github.sha }} php -m | grep -q "$ext"; then
+              echo "ERROR: PHP extension '$ext' not found."
+              exit 1
+            fi
+          done
+
+      # 超簡易 HTTP スモークテスト
+      - name: HTTP smoke test (apache + matomo)
+        run: |
+          set -e
+
+          # バックグラウンドでコンテナ起動
+          docker run -d --name matomo-http-test \
+            -p 8080:80 \
+            matomo-test:${{ github.sha }}
+
+          echo "Waiting for container to be ready..."
+          # 必要なら秒数増やす
+          sleep 40
+
+          echo "Requesting http://localhost:8080/ ..."
+          http_status=$(curl -sS -o /tmp/index.html -w "%{http_code}" http://localhost:8080/ || echo "000")
+          echo "HTTP status: $http_status"
+
+          if [ "$http_status" != "200" ]; then
+            echo "ERROR: Expected HTTP 200 but got $http_status"
+            echo "===== /tmp/index.html (if any) ====="
+            cat /tmp/index.html || true
+            echo "===== Container logs ====="
+            docker logs matomo-http-test || true
+            docker rm -f matomo-http-test || true
+            exit 1
+          fi
+
+          # HTML の中に Matomo っぽい文言があるかザックリ確認（ゆるいチェック）
+          if ! grep -qi "Matomo" /tmp/index.html; then
+            echo "WARNING: 'Matomo' keyword not found in index.html"
+            # ここで失敗にしたければ exit 1 にする
+          fi
+
+          echo "===== /tmp/index.html (head) ====="
+          head -n 50 /tmp/index.html || true
+
+          echo "===== Container logs ====="
+          docker logs matomo-http-test || true
+
+          docker rm -f matomo-http-test || true
+
+  # =========================
+  # 2) プッシュ専用ジョブ
+  # =========================
+  push:
+    runs-on: ubuntu-latest
+    needs: build-and-test   # ← テスト通ったらだけ実行
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Generate .env file
         run: |
           cat <<EOF > .env
