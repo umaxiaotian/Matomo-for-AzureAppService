@@ -1,0 +1,20 @@
+version: '3.9'
+
+services:
+  matomo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: matomo-appservice-rebuild:5.6.1
+    container_name: matomo-build
+    ports:
+      - "8080:80"      # ローカルでテスト用（任意）
+      - "2222:2222"    # SSH テスト用（任意）
+    # environment:
+    #   PHP_MEMORY_LIMIT: "256M"
+    #   MATOMO_DATABASE_HOST: "localhost"
+    #   MATOMO_DATABASE_USERNAME: "matomo"
+    #   MATOMO_DATABASE_PASSWORD: "matomo"
+    #   MATOMO_DATABASE_DBNAME: "matomo"
+    # volumes:
+    #   - ./data:/var/www/html   # ローカルテスト用（AppService本番では不要）
