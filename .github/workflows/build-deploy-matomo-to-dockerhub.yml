@@ -1,4 +1,4 @@
-name: Build & Push Matomo Image
+name: Build & Push Matomo Image (DockerHub)
 
 on:
   # 手動実行用
