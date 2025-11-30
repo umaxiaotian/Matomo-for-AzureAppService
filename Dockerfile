@@ -43,8 +43,10 @@ RUN set -ex; \
     # SSH のセットアップ（root/Docker!, ポート2222用）
     echo "root:Docker!" | chpasswd; \
     mkdir -p /var/run/sshd; \
-    # ⚠ ホスト鍵はビルド時には作らない（Trivy で secrets 扱いされるため）
-    # ssh-keygen -A; \
+    \
+    # ⚠ openssh-server の postinst が自動生成したホスト鍵を削除
+    #    → 実際の鍵生成は起動時の docker-entrypoint.sh に移譲
+    rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub; \
     \
     # ビルド用の依存を掃除
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
