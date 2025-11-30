@@ -120,8 +120,8 @@ jobs:
 
           body="A new Matomo version ${MATOMO_LATEST} is available. Current GHCR 'latest' points to ${GHCR_LATEST:-none}. Please build and publish:
 
-ghcr.io/${REPO%%/*}/${IMAGE_NAME}:${MATOMO_LATEST}
-"
+          ghcr.io/${REPO%%/*}/${IMAGE_NAME}:${MATOMO_LATEST}
+          "
 
           echo "Creating issue: $title"
 
