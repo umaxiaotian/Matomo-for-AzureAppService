@@ -7,7 +7,7 @@ permissions:
 
 on:
   schedule:
-    # 毎日 0:00 UTC 実行
+    # 毎日 0:00 UTC
     - cron: "0 0 * * *"
   workflow_dispatch: {}
 
@@ -16,7 +16,7 @@ env:
 
 jobs:
   # =========================
-  # 1) GHCR から全タグ一覧を取るジョブ
+  # 1) GHCR から全タグ一覧を取得
   # =========================
   fetch-tags:
     runs-on: ubuntu-latest
@@ -37,44 +37,25 @@ jobs:
         run: |
           set -e
 
-          # users/ と orgs/ のどちらかで取れるように試す
-          base="https://api.github.com"
-          user_url="${base}/users/${GHCR_OWNER}/packages/container/${GHCR_PACKAGE}/versions?per_page=100"
-          org_url="${base}/orgs/${GHCR_OWNER}/packages/container/${GHCR_PACKAGE}/versions?per_page=100"
+          API_URL="https://api.github.com/users/${GHCR_OWNER}/packages/container/${GHCR_PACKAGE}/versions?per_page=100"
+          echo "Fetching GHCR versions from: $API_URL"
 
-          echo "Trying user endpoint: $user_url"
-          status=$(curl -sS -o resp.json -w "%{http_code}" \
+          curl -sSL \
             -H "Authorization: Bearer ${GHCR_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            "$user_url")
+            "$API_URL" > resp.json
 
-          if [ "$status" -eq 200 ]; then
-            echo "Fetched from users endpoint."
-          else
-            echo "User endpoint returned $status, trying org endpoint: $org_url"
-            status=$(curl -sS -o resp.json -w "%{http_code}" \
-              -H "Authorization: Bearer ${GHCR_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "$org_url")
-
-            if [ "$status" -ne 200 ]; then
-              echo "Failed to fetch GHCR package versions. HTTP status: $status"
-              cat resp.json || true
-              exit 1
-            fi
-          fi
-
+          echo "Raw response:"
           cat resp.json
 
           # tags を全部集めてユニーク化
           tags_json=$(jq -r '
             .[]
             | .metadata.container.tags[]?
-          ' resp.json | sort -u | jq -R . | jq -s .)
+          ' resp.json 2>/dev/null | sort -u | jq -R . | jq -s .)
 
           if [ -z "$tags_json" ] || [ "$tags_json" = "[]" ]; then
             echo "No tags found for ${GHCR_OWNER}/${GHCR_PACKAGE}."
-            # 空配列を返しておく（matrix が空なら scan ジョブはスキップされる）
             echo 'tags=[]' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -89,7 +70,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: fetch-tags
 
-    # タグごとに並列スキャン（fail-fast 無効）
     strategy:
       fail-fast: false
       matrix:
@@ -126,7 +106,7 @@ jobs:
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
 
-      # JSON -> 件数 & Markdownレポート生成
+      # JSON -> 件数 & Markdown レポート生成
       - name: Summarize vulnerabilities
         id: summary
         env:
@@ -136,18 +116,10 @@ jobs:
         run: |
           set -e
 
-          if [ ! -s trivy.json ]; then
-            echo "No trivy.json output. Skipping."
-            echo "total=0" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           total=$(jq '[.Results[].Vulnerabilities? // [] | length] | add // 0' trivy.json)
-          echo "Total HIGH/CRITICAL vulnerabilities: $total"
           echo "total=$total" >> "$GITHUB_OUTPUT"
 
           if [ "$total" -eq 0 ]; then
-            echo "No HIGH/CRITICAL vulnerabilities for tag ${IMAGE_TAG}."
             exit 0
           fi
 
@@ -160,20 +132,22 @@ jobs:
             | "| \($target) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \(.Severity) |"
           ' trivy.json > table_rows.txt || true
 
-          cat <<EOF > trivy-report.md
-# Container vulnerability report for tag \`${IMAGE_TAG}\`
+          cat > trivy-report.md <<'EOF'
+          # Container vulnerability report
+          
+          Image: `ghcr.io/${GHCR_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}`
+          
+          | Target | CVE | Package | Installed | Fixed | Severity |
+          |--------|-----|---------|-----------|-------|----------|
+          EOF
 
-- Image: \`ghcr.io/${GHCR_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}\`
-- Total HIGH/CRITICAL: **${total}**
+          cat table_rows.txt >> trivy-report.md
 
-| Target | CVE | Package | Installed | Fixed | Severity |
-|--------|-----|---------|-----------|-------|----------|
-$(cat table_rows.txt)
+          echo "" >> trivy-report.md
+          echo "> This issue was generated automatically by a scheduled GitHub Actions workflow." >> trivy-report.md
 
-> This issue was generated automatically by a scheduled GitHub Actions workflow.
-EOF
 
-      # Issue 作成 or 追記（タグごと）
+      # タグごとに Issue 作成 or 追記
       - name: Create or update issue for this tag
         if: steps.summary.outputs.total != '0'
         uses: actions/github-script@v7
