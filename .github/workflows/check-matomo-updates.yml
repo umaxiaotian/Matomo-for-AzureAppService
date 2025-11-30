@@ -1,0 +1,141 @@
+name: Check Matomo releases and create issue
+
+permissions:
+  contents: read
+  issues: write
+
+on:
+  # 毎日 1回チェック（UTC 0時 / 日本時間09:00ごろ）
+  schedule:
+    - cron: "0 0 * * *"
+  # 手動トリガーも可能
+  workflow_dispatch: {}
+
+jobs:
+  check-matomo-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # .env から現在の MATOMO_VERSION を取得
+      - name: Read current Matomo version from .env
+        id: current
+        run: |
+          if [ ! -f .env ]; then
+            echo "::error::.env not found. Cannot determine current Matomo version."
+            exit 1
+          fi
+
+          MATOMO_VERSION=$(grep '^MATOMO_VERSION=' .env | head -n1 | cut -d= -f2 | tr -d '[:space:]')
+          if [ -z "$MATOMO_VERSION" ]; then
+            echo "::error::MATOMO_VERSION not found in .env"
+            exit 1
+          fi
+
+          echo "Current Matomo version: $MATOMO_VERSION"
+          echo "matomo_version=$MATOMO_VERSION" >> "$GITHUB_OUTPUT"
+
+      # RSS から最新の Matomo バージョンを取得
+      - name: Fetch latest Matomo version from changelog feed
+        id: remote
+        run: |
+          python << 'PY'
+          import os, sys, re, urllib.request, xml.etree.ElementTree as ET
+
+          url = "https://matomo.org/changelog/feed/"
+          try:
+            with urllib.request.urlopen(url, timeout=30) as resp:
+              data = resp.read()
+          except Exception as e:
+            print(f"::error::Failed to fetch RSS feed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+          try:
+            root = ET.fromstring(data)
+          except Exception as e:
+            print(f"::error::Failed to parse RSS XML: {e}", file=sys.stderr)
+            sys.exit(1)
+
+          channel = root.find("channel")
+          if channel is None:
+            print("::error::RSS does not contain <channel>", file=sys.stderr)
+            sys.exit(1)
+
+          latest_version = None
+          # RSS の item タイトルから 1つ目の「x.y.z」を取る
+          for item in channel.findall("item"):
+            title = item.findtext("title") or ""
+            m = re.search(r"(\d+\.\d+\.\d+)", title)
+            if not m:
+              continue
+            latest_version = m.group(1)
+            break
+
+          if not latest_version:
+            print("::error::Could not find version number in RSS feed titles.", file=sys.stderr)
+            sys.exit(1)
+
+          print(f"Latest Matomo version from RSS: {latest_version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"latest_version={latest_version}\n")
+          PY
+
+      # バージョンが違えば Issue を作成（重複チェック付き）
+      - name: Create issue if a new version is available
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const current = "${{ steps.current.outputs.matomo_version }}";
+            const latest  = "${{ steps.remote.outputs.latest_version }}";
+
+            if (!current || !latest) {
+              core.warning(`Missing version info. current='${current}', latest='${latest}'`);
+              return;
+            }
+
+            if (current === latest) {
+              core.info(`Matomo is up-to-date (${current}).`);
+              return;
+            }
+
+            const title = `Matomo update available: ${latest}`;
+
+            // 既に同じタイトルの Issue があるかチェック（ラベルは依存系っぽく）
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              per_page: 100,
+            });
+
+            if (issues.some(issue => issue.title === title)) {
+              core.info(`Issue for version ${latest} already exists.`);
+              return;
+            }
+
+            const bodyLines = [
+              `A new Matomo version has been released: **${latest}**.`,
+              "",
+              `Current version in this repo: \`${current}\`.`,
+              "",
+              "- Changelog: https://matomo.org/changelog/",
+              "- RSS feed: https://matomo.org/changelog/feed/",
+              "",
+              "To update:",
+              "1. Update `MATOMO_VERSION` in `.env`",
+              "2. Re-run the container build & push workflow",
+              "3. Deploy the new image to Azure App Service",
+            ];
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: bodyLines.join("\n"),
+              labels: ["dependencies", "matomo"]
+            });
+
+            core.info(`Created issue: ${title}`);
