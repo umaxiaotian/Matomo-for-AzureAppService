@@ -7,8 +7,9 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 0 * * *"   # 1日1回チェック
-  workflow_dispatch: {}   # 手動実行も可能
+    # 毎日 0:00 UTC 実行
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}
 
 env:
   IMAGE_NAME: matomo-appservice-rebuild
@@ -21,13 +22,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- jq が必要 ---
       - name: Install jq
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
 
-      # --- Matomo 最新バージョン取得 ---
+      # 1) Matomo 最新バージョン取得
       - name: Get latest Matomo version
         id: matomo
         run: |
@@ -42,16 +42,16 @@ jobs:
           fi
 
           echo "Matomo latest version: $latest"
-          echo "latest=$latest" >> $GITHUB_OUTPUT
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
 
-      # --- GHCR の latest タグの実バージョン取得 ---
+      # 2) GHCR の latest タグが指しているバージョンを取得
       - name: Get GHCR latest tag version
         id: ghcr
         env:
           OWNER: ${{ github.repository_owner }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Fetching GHCR container versions..."
+          echo "Fetching GHCR container versions for ${OWNER}/${IMAGE_NAME} ..."
 
           resp=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -60,72 +60,67 @@ jobs:
 
           echo "$resp" > versions.json
 
-          # latest タグを持つエントリを取得
+          # latest タグを持つエントリを探す
           latest_entry=$(echo "$resp" | jq -r '.[] | select(.metadata.container.tags[]? == "latest")')
 
           if [ -z "$latest_entry" ]; then
-            echo "No latest tag exists in GHCR."
-            echo "ghcr_latest_version=" >> $GITHUB_OUTPUT
+            echo "No 'latest' tag found in GHCR."
+            echo "ghcr_latest_version=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # latest タグが示す実際のバージョンを取得（latest を除く最初の tag）
+          # latest 以外のタグのうち最初のものを「latest が指す実バージョン」とみなす
           version=$(echo "$latest_entry" | jq -r '.metadata.container.tags[] | select(. != "latest")' | head -n1)
 
-          echo "GHCR latest points to version: $version"
+          echo "GHCR latest tag points to version: $version"
+          echo "ghcr_latest_version=$version" >> "$GITHUB_OUTPUT"
 
-          echo "ghcr_latest_version=$version" >> $GITHUB_OUTPUT
-
-      # --- 差分チェック & Issue 作成 ---
+      # 3) Matomo最新版 vs GHCR latest を比較し、差分があれば Issue 作成
       - name: Compare and create issue if needed
         env:
           MATOMO_LATEST: ${{ steps.matomo.outputs.latest }}
           GHCR_LATEST: ${{ steps.ghcr.outputs.ghcr_latest_version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
         run: |
           echo "Matomo latest upstream version: $MATOMO_LATEST"
-          echo "GHCR latest version:           $GHCR_LATEST"
+          echo "GHCR latest version:           ${GHCR_LATEST:-none}"
 
-          # GHCR に latest が存在しない場合も Issue 作成
+          create_issue="no"
+
+          # GHCR に latest が無い、またはバージョンが違うなら Issue 対象
           if [ -z "$GHCR_LATEST" ]; then
+            echo "No GHCR latest version found. Will create issue."
             create_issue="yes"
           elif [ "$MATOMO_LATEST" != "$GHCR_LATEST" ]; then
+            echo "Version mismatch detected. Will create issue."
             create_issue="yes"
-          else
-            create_issue="no"
           fi
 
-          if [ "$create_issue" = "no" ]; then
+          if [ "$create_issue" != "yes" ]; then
             echo "Versions match. Nothing to do."
             exit 0
           fi
 
           title="Matomo ${MATOMO_LATEST} is available"
-          
-          # 重複チェック
-          exists=$(curl -s \
+
+          # 重複 Issue がないか確認
+          existing=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${REPO}/issues?state=open" \
+            "https://api.github.com/repos/${REPO}/issues?state=open&per_page=100" \
             | jq -r '.[].title' \
             | grep -Fx "$title" || true)
 
-          if [ -n "$exists" ]; then
-            echo "Issue already exists. Skipping."
+          if [ -n "$existing" ]; then
+            echo "Issue '$title' already exists. Skipping creation."
             exit 0
           fi
 
-          body="A new Matomo version **${MATOMO_LATEST}** is available.
+          body="A new Matomo version ${MATOMO_LATEST} is available. Current GHCR 'latest' points to ${GHCR_LATEST:-none}. Please build and publish:
 
-- Upstream changelog feed: https://matomo.org/changelog/feed/
-- Current GHCR latest tag: ${GHCR_LATEST:-none}
-
-Please build and publish the image:
-
-\`\`\`
 ghcr.io/${REPO%%/*}/${IMAGE_NAME}:${MATOMO_LATEST}
-\`\`\`
 "
 
           echo "Creating issue: $title"
