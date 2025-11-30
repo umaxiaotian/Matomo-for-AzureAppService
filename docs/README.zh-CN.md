@@ -142,5 +142,4 @@ Connections using insecure transport are prohibited while --require_secure_trans
 1. 打开 Azure Database for MySQL 的 **Server parameters**
 2. 将 `require_secure_transport` 设置为 **OFF**
 3. 保存并应用更改
-などもできます！
-```
+
