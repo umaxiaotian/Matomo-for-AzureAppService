@@ -44,9 +44,14 @@ jobs:
         id: ghcr
         env:
           GHCR_OWNER: ${{ github.repository_owner }}
-          GHCR_TOKEN: ${{ secrets.GHCR_PAT }}   # ← PAT を使う
-          GHCR_PACKAGE: ${{ env.IMAGE_NAME }}  # = matomo-appservice-rebuild
+          GHCR_TOKEN: ${{ secrets.PUSH_GITHUB_TOKEN }}  # ← ココを PUSH_GITHUB_TOKEN に
+          GHCR_PACKAGE: ${{ env.IMAGE_NAME }}          # matomo-appservice-rebuild
         run: |
+          if [ -z "$GHCR_TOKEN" ]; then
+            echo "GHCR_TOKEN is empty. Please set secrets.PUSH_GITHUB_TOKEN correctly."
+            exit 1
+          fi
+
           echo "Fetching existing GHCR versions for $GHCR_OWNER/${GHCR_PACKAGE} ..."
 
           api_url="https://api.github.com/users/${GHCR_OWNER}/packages/container/${GHCR_PACKAGE}/versions?per_page=100"
@@ -59,11 +64,18 @@ jobs:
 
           echo "$resp" > ghcr-versions.json
 
+          # 認証エラー時は即落とす
+          if echo "$resp" | jq -e '.message == "Bad credentials"' > /dev/null 2>&1; then
+            echo "GitHub API says: Bad credentials. Check scopes of PUSH_GITHUB_TOKEN."
+            cat ghcr-versions.json
+            exit 1
+          fi
+
           # パッケージが無い場合
           if echo "$resp" | jq -e '.message == "Package not found."' > /dev/null 2>&1; then
             echo "Package not found on GHCR. Assuming no existing tags yet."
             tags=""
-          # 正常にバージョンの配列が返ってきた場合
+          # 正常に配列が返ってきた場合
           elif echo "$resp" | jq -e 'type == "array"' > /dev/null 2>&1; then
             tags=$(echo "$resp" | jq -r '.[].metadata.container.tags[]' | sort -u)
           else
@@ -75,9 +87,10 @@ jobs:
           echo "Existing tags:"
           echo "$tags"
 
-          # 改行 → スペース区切り
+          # 改行 → スペース区切りにして次のステップへ渡す
           tags_line=$(echo "$tags" | tr '\n' ' ')
           echo "tags=$tags_line" >> "$GITHUB_OUTPUT"
+
 
       # 3) 最新バージョンが GHCR に無ければ Issue を作成
       - name: Compare latest version with GHCR tags and create issue if needed
