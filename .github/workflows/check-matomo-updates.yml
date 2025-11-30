@@ -47,19 +47,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching GHCR versions for $GHCR_OWNER/${IMAGE_NAME} ..."
+
+          # ★ポイント★
+          # /users/{owner}/... ではなく /user/... を使う
           resp=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/users/${GHCR_OWNER}/packages/container/${IMAGE_NAME}/versions?per_page=100")
+            "https://api.github.com/user/packages/container/${IMAGE_NAME}/versions?per_page=100")
 
           echo "$resp" > ghcr-versions.json
-
-          # もし "Package not found." なら、パッケージ未作成として扱う
-          if echo "$resp" | jq -e '.message? == "Package not found."' > /dev/null 2>&1; then
-            echo "GHCR package not found. Treating as no existing image."
-            echo "current=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           # 配列で返ってきているか確認
           if ! echo "$resp" | jq -e 'type == "array"' > /dev/null 2>&1; then
@@ -86,6 +82,7 @@ jobs:
 
           echo "Current Matomo version in GHCR latest: $current"
           echo "current=$current" >> "$GITHUB_OUTPUT"
+
 
       # 3) Matomo の最新バージョンと GHCR latest のバージョンを比較して、違えば Issue を作成
       - name: Compare latest upstream with GHCR latest and create issue if needed
