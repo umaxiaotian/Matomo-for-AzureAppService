@@ -43,7 +43,8 @@ RUN set -ex; \
     # SSH のセットアップ（root/Docker!, ポート2222用）
     echo "root:Docker!" | chpasswd; \
     mkdir -p /var/run/sshd; \
-    ssh-keygen -A; \
+    # ⚠ ホスト鍵はビルド時には作らない（Trivy で secrets 扱いされるため）
+    # ssh-keygen -A; \
     \
     # ビルド用の依存を掃除
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \

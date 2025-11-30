@@ -54,10 +54,22 @@ usermod  -o -u "$actual_uid" www-data
 # /var/www/html 全体の owner を www-data に
 chown -R www-data:www-data "$WEBROOT"
 
-# ===== SSHD を起動 (ポート 2222, root/Docker!) =====
+# ===== SSHD の準備（ホスト鍵生成 + 起動） =====
 # sshd_config で Port 2222, PermitRootLogin yes, PasswordAuthentication yes を指定済み
 if [ ! -d "/var/run/sshd" ]; then
     mkdir -p /var/run/sshd
+fi
+
+# ホスト鍵が存在しない場合のみ起動時に生成
+if command -v ssh-keygen >/dev/null 2>&1; then
+    if ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
+        echo "No SSH host keys found, generating with ssh-keygen -A..."
+        ssh-keygen -A
+    else
+        echo "SSH host keys already exist, skipping generation."
+    fi
+else
+    echo "Warning: ssh-keygen not found; SSH host keys will not be generated."
 fi
 
 echo "Starting sshd on port 2222..."
