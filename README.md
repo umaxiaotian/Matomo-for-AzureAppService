@@ -1,7 +1,8 @@
+![abe15ab0-a704-47c7-b61d-a07a5c28c5da](https://github.com/user-attachments/assets/e179ddd9-9343-4dca-8f9b-bdc784964f8e)
+
 # Matomo for Azure App Service Rebuild
 
 This container image is designed specifically to run **Matomo 5.6.1** on **Azure App Service (Linux Containers)** with full compatibility for:
-![abe15ab0-a704-47c7-b61d-a07a5c28c5da](https://github.com/user-attachments/assets/e179ddd9-9343-4dca-8f9b-bdc784964f8e)
 
 - ✔ Azure Files persistent storage (config, plugins, tmp)
 - ✔ Automatic UID/GID sync for Azure Files (fixes PHP session issues)
@@ -125,4 +126,5 @@ If you want to connect without SSL, you must:
 2. Set the `require_secure_transport` parameter to **OFF**
 
 3. Save / apply the change
+
 
