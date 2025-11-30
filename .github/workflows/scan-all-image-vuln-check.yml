@@ -52,7 +52,7 @@ jobs:
           tags_json=$(jq -r '
             .[]
             | .metadata.container.tags[]?
-            | select(. != "latest")     # ← ★ ここで latest を除外
+            | select(. != "latest")
           ' resp.json 2>/dev/null | sort -u | jq -R . | jq -s -c .)
 
           if [ -z "$tags_json" ] || [ "$tags_json" = "[]" ]; then
@@ -66,7 +66,7 @@ jobs:
 
 
   # =========================
-  # 2) タグごとに Trivy スキャン
+  # 2) タグごとに Trivy スキャン（Vuln + Secrets + Misconfig）
   # =========================
   scan:
     runs-on: ubuntu-latest
@@ -92,24 +92,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.PUSH_GITHUB_TOKEN }}
 
-      # Trivy スキャン（HIGH/CRITICALのみ）
+      # Trivy スキャン（HIGH/CRITICAL vuln + Secrets + Misconfig）
       - name: Scan image with Trivy
         id: trivy
-        env:
-          GHCR_OWNER: ${{ github.repository_owner }}
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
-          IMAGE_TAG: ${{ matrix.tag }}
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ghcr.io/${{ env.GHCR_OWNER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          image-ref: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}
           format: json
           output: trivy.json
           vuln-type: 'os,library'
-          severity: 'HIGH,CRITICAL'
-          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'   # ← 脆弱性は HIGH/CRITICAL に絞る
+          ignore-unfixed: true        # ← 修正パッチのあるものだけ
+          scanners: 'vuln,misconfig,secret'  # ← Config(Misconfig) + Secrets もスキャン
+          exit-code: '0'              # ← ここでは失敗させない（後段で件数見て判断）
 
-      # JSON -> 件数 & Markdown レポート生成
-      - name: Summarize vulnerabilities
+      # JSON -> vuln件数 + secret件数 + misconfig件数 を集計 & Markdown レポート生成
+      - name: Summarize vulnerabilities, secrets and misconfigurations
         id: summary
         env:
           GHCR_OWNER: ${{ github.repository_owner }}
@@ -118,15 +116,37 @@ jobs:
         run: |
           set -e
 
-          total=$(jq '[.Results[].Vulnerabilities? // [] | length] | add // 0' trivy.json)
-          echo "Total HIGH/CRITICAL vulnerabilities for ${IMAGE_TAG}: ${total}"
-          echo "total=$total" >> "$GITHUB_OUTPUT"
-
-          if [ "$total" -eq 0 ]; then
-            echo "No HIGH/CRITICAL vulnerabilities. Skipping issue creation."
+          if [ ! -f trivy.json ]; then
+            echo "trivy.json not found; something went wrong in Trivy step."
+            echo "total=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          # HIGH/CRITICAL の OS/library 脆弱性件数
+          total_vuln=$(jq '[.Results[].Vulnerabilities? // [] | length] | add // 0' trivy.json)
+          # Secrets の件数
+          total_secret=$(jq '[.Results[].Secrets? // [] | length] | add // 0' trivy.json)
+          # Misconfig(Config) の件数
+          total_misconf=$(jq '[.Results[].Misconfigurations? // [] | length] | add // 0' trivy.json)
+
+          total=$((total_vuln + total_secret + total_misconf))
+
+          echo "Total HIGH/CRITICAL vulnerabilities: ${total_vuln}"
+          echo "Total secrets: ${total_secret}"
+          echo "Total misconfigurations: ${total_misconf}"
+          echo "Total issues (vuln + secrets + misconfig) for ${IMAGE_TAG}: ${total}"
+
+          echo "total_vuln=$total_vuln" >> "$GITHUB_OUTPUT"
+          echo "total_secret=$total_secret" >> "$GITHUB_OUTPUT"
+          echo "total_misconf=$total_misconf" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+
+          if [ "$total" -eq 0 ]; then
+            echo "No HIGH/CRITICAL vulnerabilities, secrets or misconfigurations. Skipping issue creation."
+            exit 0
+          fi
+
+          # ===== Vulnerabilities テーブル作成 =====
           jq -r '
             .Results[]
             | select(.Vulnerabilities != null)
@@ -134,20 +154,76 @@ jobs:
             | .Vulnerabilities[]
             | select(.Severity == "HIGH" or .Severity == "CRITICAL")
             | "| \($target) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \(.Severity) |"
-          ' trivy.json > table_rows.txt || true
+          ' trivy.json > vuln_rows.txt || true
 
-          cat > trivy-report.md <<'EOF'
-          # Container vulnerability report
+          # ===== Secrets テーブル作成 =====
+          jq -r '
+            .Results[]
+            | select(.Secrets != null)
+            | .Target as $target
+            | .Secrets[]
+            | "| \($target) | \(.RuleID // "-") | \(.Category // "-") | \(.Location // "-") | \(.Severity // "-") |"
+          ' trivy.json > secret_rows.txt || true
+
+          # ===== Misconfig(Misconfiguration) テーブル作成 =====
+          jq -r '
+            .Results[]
+            | select(.Misconfigurations != null)
+            | .Target as $target
+            | .Misconfigurations[]
+            | "| \($target) | \(.ID // "-") | \(.Title // "-") | \(.Severity // "-") |"
+          ' trivy.json > misconf_rows.txt || true
+
+          # ===== Markdown レポート組み立て =====
+          cat > trivy-report.md <<EOF
+          # Container security report
+
+          Image: \`ghcr.io/${GHCR_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}\`
+          
+          ## Vulnerabilities (HIGH / CRITICAL)
           
           | Target | CVE | Package | Installed | Fixed | Severity |
           |--------|-----|---------|-----------|-------|----------|
           EOF
 
-          cat table_rows.txt >> trivy-report.md
+          if [ -s vuln_rows.txt ]; then
+            cat vuln_rows.txt >> trivy-report.md
+          else
+            echo "_No HIGH/CRITICAL vulnerabilities detected._" >> trivy-report.md
+          fi
+
+          # Secrets セクション
+          if [ -s secret_rows.txt ]; then
+            cat >> trivy-report.md <<'EOF2'
+
+            ## Secrets
+            
+            | Target | RuleID | Category | Location | Severity |
+            |--------|--------|----------|----------|----------|
+            EOF2
+            cat secret_rows.txt >> trivy-report.md
+          else
+            echo "" >> trivy-report.md
+            echo "_No secrets detected._" >> trivy-report.md
+          fi
+
+          # Misconfig セクション
+          if [ -s misconf_rows.txt ]; then
+            cat >> trivy-report.md <<'EOF3'
+
+            ## Misconfigurations
+            
+            | Target | ID | Title | Severity |
+            |--------|----|-------|----------|
+            EOF3
+            cat misconf_rows.txt >> trivy-report.md
+          else
+            echo "" >> trivy-report.md
+            echo "_No misconfigurations detected._" >> trivy-report.md
+          fi
 
           echo "" >> trivy-report.md
           echo "> This issue was generated automatically by a scheduled GitHub Actions workflow." >> trivy-report.md
-
 
       # タグごとに Issue 作成 or 追記
       - name: Create or update issue for this tag
@@ -160,7 +236,7 @@ jobs:
           script: |
             const fs = require('fs');
             const tag = process.env.IMAGE_TAG;
-            const title = `[Security] Vulnerabilities found in GHCR image tag ${tag}`;
+            const title = `[Security] Vulnerabilities/Secrets/Misconfig found in GHCR image tag ${tag}`;
             const body = fs.readFileSync('trivy-report.md', 'utf8');
 
             // 同じタグ用のオープンIssueがあるか
