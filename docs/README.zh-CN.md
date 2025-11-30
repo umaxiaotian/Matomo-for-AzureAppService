@@ -1,15 +1,17 @@
-# Matomo for Azure App Service Rebuild
-这个容器镜像专为在 **Azure App Service（Linux 容器）** 上运行 **Matomo** 而设计，并完全兼容以下功能：
+![abe15ab0-a704-47c7-b61d-a07a5c28c5da](https://github.com/user-attachments/assets/e179ddd9-9343-4dca-8f9b-bdc784964f8e)
+# Matomo for Azure 应用服务（App Service）重建版
 
-- ✔ 支持 Azure Files 持久化存储（config、plugins、tmp）
-- ✔ 自动同步 Azure Files 的 UID/GID（修复 PHP 会话权限问题）
+这个容器镜像专为在 **Azure 应用服务（Linux 容器）** 上运行 **Matomo** 而设计，并完全兼容以下功能：
+
+- ✔ 支持 Azure 文件共享（Azure Files）持久化存储（config、plugins、tmp）
+- ✔ 自动同步 Azure 文件共享的 UID/GID（修复 PHP 会话权限问题）
 - ✔ 从专用挂载路径 (`/matomo_htaccess`) 加载自定义 `.htaccess`
-- ✔ 提供 SSH 访问（端口 **2222**），兼容 Azure Portal 的 SSH 控制台
+- ✔ 提供 SSH 访问（端口 **2222**），兼容 Azure 门户中的 SSH 控制台
 - ✔ 支持基于 X-Forwarded-For 的 IP 访问限制
-- ✔ 完全兼容 App Service 环境变量
+- ✔ 完全兼容 应用服务（App Service）环境变量
 - ✔ Matomo 核心无需任何修改
 - ✔ **强化安全性 — 所有镜像均通过 Trivy 扫描**
-- ✔ **所有标签（tags）每日自动进行漏洞扫描**（GitHub Actions）
+- ✔ **所有镜像标签（tags）每天由 GitHub Actions 自动执行漏洞扫描**
 
 ---
 
@@ -17,12 +19,12 @@
 
 本项目集成了 **Trivy（Aqua Security）**，确保镜像在构建和发布过程中保持安全。
 
-- 每次构建都会自动执行 **Trivy 扫描**，检测系统与库的漏洞。
-- 如果发现任何 *High* 或 *Critical* 等级的漏洞，CI 流程会 **直接失败**。
+- 每次构建都会自动执行 **Trivy 扫描**，检测操作系统与依赖库中的漏洞。
+- 如果发现任何 *High* 或 *Critical* 等级漏洞，CI 流程会 **立即失败**。
 - 通过 GitHub Actions 定时任务执行：
-  - **每日扫描所有已发布标签**
+  - **每天扫描所有已发布的镜像标签**
   - 自动报告或提醒新发现的漏洞
-- 这确保了即使 Matomo 或基础镜像更新后，安全性仍可持续保持。
+- 即使 Matomo 或基础镜像更新后，也能保证长期安全性。
 
 CI 中使用的示例扫描命令：
 
@@ -34,36 +36,36 @@ trivy image --severity HIGH,CRITICAL --exit-code 1 ghcr.io/OWNER/matomo-appservi
 
 # 功能特性
 
-## 1️⃣ Azure App Service 环境变量
+## 1️⃣ Azure 应用服务环境变量
 
-Matomo 的数据库配置应在 “App Settings” 中设置：
+Matomo 的数据库配置应在 “应用设置（App Settings）” 中进行设置：
 
-| 环境变量名称                                | 作用                               |
-| ------------------------------------- | -------------------------------- |
-| `MATOMO_DATABASE_HOST`                | 数据库主机                            |
-| `MATOMO_DATABASE_NAME`                | 数据库名称                            |
-| `MATOMO_DATABASE_PASSWORD`            | 数据库密码                            |
-| `MATOMO_DATABASE_PORT`                | 数据库端口                            |
-| `MATOMO_DATABASE_USER`                | 数据库用户名                           |
-| `WEBSITES_CONTAINER_START_TIME_LIMIT` | （可选）容器启动超时时间延长                   |
-| `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | 使用自定义 Azure Files 时必须为 **false** |
+| 环境变量名称                                | 作用                              |
+| ------------------------------------- | ------------------------------- |
+| `MATOMO_DATABASE_HOST`                | 数据库主机                           |
+| `MATOMO_DATABASE_NAME`                | 数据库名称                           |
+| `MATOMO_DATABASE_PASSWORD`            | 数据库密码                           |
+| `MATOMO_DATABASE_PORT`                | 数据库端口                           |
+| `MATOMO_DATABASE_USER`                | 数据库用户名                          |
+| `WEBSITES_CONTAINER_START_TIME_LIMIT` | （可选）延长容器启动超时时间                  |
+| `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | 使用自定义 Azure 文件共享时必须设为 **false** |
 
 容器启动时会自动读取这些变量。
 
 ---
 
-## 2️⃣ Azure Files 挂载点（推荐配置）
+## 2️⃣ Azure 文件共享挂载点（推荐）
 
-App Service 建议按如下方式挂载 Azure Files：
+应用服务（App Service）建议按如下方式挂载 Azure 文件共享：
 
 | 共享名称         | 挂载路径                    | 作用                |
 | ------------ | ----------------------- | ----------------- |
 | **config**   | `/var/www/html/config`  | 持久化 Matomo 配置文件   |
-| **plugins**  | `/var/www/html/plugins` | 自定义插件及其持久化        |
+| **plugins**  | `/var/www/html/plugins` | 自定义插件持久化          |
 | **tmp**      | `/var/www/html/tmp`     | 会话、缓存、日志          |
 | **htaccess** | `/matomo_htaccess`      | 覆写根目录 `.htaccess` |
 
-容器会检测 `/var/www/html/tmp`（Azure Files）的 UID/GID，
+容器会检测 `/var/www/html/tmp`（Azure 文件共享）的 UID/GID，
 并自动调整运行时 `www-data` 用户的权限。
 
 可避免 Matomo 常见错误：
@@ -88,14 +90,14 @@ Session data file is not created by your uid
 /var/www/html/.htaccess
 ```
 
-可用于：
+适用场景：
 
 * IP 允许 / 拒绝 列表
 * 基于 X-Forwarded-For 的访问过滤
 * 反向代理 rewrite 规则
-* 安全加固规则
+* 安全加固策略
 
-### 示例：限制 index.php 仅允许指定 IP
+### 示例：限制 index.php 仅允许特定 IP
 
 ```apache
 RewriteEngine On
@@ -118,9 +120,9 @@ RewriteRule ^ - [F]
 
 ## 4️⃣ SSH 访问（端口 2222）
 
-容器内置 OpenSSH，并在 **2222 端口**运行，兼容 Azure Portal 的 SSH 控制台。
+容器内置 OpenSSH，并在 **2222** 端口运行，兼容 Azure 门户的 SSH 控制台。
 
-本地测试：
+本地测试方式：
 
 ```bash
 ssh root@localhost -p 2222
@@ -137,8 +139,10 @@ Password: Docker!
 Connections using insecure transport are prohibited while --require_secure_transport=ON.
 ```
 
-本镜像默认使用 **非 SSL 连接**。如需非 SSL 方式连接，请：
+本镜像默认使用 **非 SSL 连接**。如需关闭 SSL，请：
 
-1. 打开 Azure Database for MySQL 的 **Server parameters**
+1. 打开 Azure Database for MySQL 的 **服务器参数（Server parameters）**
 2. 将 `require_secure_transport` 设置为 **OFF**
 3. 保存并应用更改
+
+
