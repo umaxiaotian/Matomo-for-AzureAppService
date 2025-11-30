@@ -11,6 +11,27 @@ This container image is designed specifically to run **Matomo 5.6.1** on **Azure
 - ✔ X-Forwarded-For–aware IP restriction
 - ✔ Works with App Service environment variables
 - ✔ Zero modification required on Matomo core
+- ✔ **Security hardened — all images are scanned with Trivy**
+- ✔ **Daily vulnerability scanning across *all tags*** (GitHub Actions)
+
+---
+
+# 🔐 Security & Vulnerability Control (Trivy)
+
+This project integrates **Trivy (Aqua Security)** to ensure the image remains secure.
+
+- Every build runs an automated **Trivy scan** to detect OS and library vulnerabilities.
+- The CI pipeline **fails** if any *High* or *Critical* vulnerabilities are detected.
+- A scheduled GitHub Actions workflow performs:
+  - **Daily Trivy scan** across *all published tags*
+  - Auto-reporting or alerting when new vulnerabilities are found
+- This ensures long-term safety even after Matomo or base image updates.
+
+Example scan command used in CI:
+
+```bash
+trivy image --severity HIGH,CRITICAL --exit-code 1 ghcr.io/OWNER/matomo-appservice-rebuild:latest
+````
 
 ---
 
@@ -20,14 +41,14 @@ This container image is designed specifically to run **Matomo 5.6.1** on **Azure
 
 Matomo database settings should be configured in “App Settings”:
 
-| Environment Variable | Purpose |
-|----------------------|----------|
-| `MATOMO_DATABASE_HOST` | Database host |
-| `MATOMO_DATABASE_NAME` | Database name |
-| `MATOMO_DATABASE_PASSWORD` | Database password |
-| `MATOMO_DATABASE_PORT` | Database port |
-| `MATOMO_DATABASE_USER` | Database user |
-| `WEBSITES_CONTAINER_START_TIME_LIMIT` | (optional) Increased startup timeout |
+| Environment Variable                  | Purpose                                                |
+| ------------------------------------- | ------------------------------------------------------ |
+| `MATOMO_DATABASE_HOST`                | Database host                                          |
+| `MATOMO_DATABASE_NAME`                | Database name                                          |
+| `MATOMO_DATABASE_PASSWORD`            | Database password                                      |
+| `MATOMO_DATABASE_PORT`                | Database port                                          |
+| `MATOMO_DATABASE_USER`                | Database user                                          |
+| `WEBSITES_CONTAINER_START_TIME_LIMIT` | (optional) Increased startup timeout                   |
 | `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | Must be **false** when using custom Azure Files mounts |
 
 The container automatically consumes these variables through the entrypoint.
@@ -38,21 +59,21 @@ The container automatically consumes these variables through the entrypoint.
 
 Your App Service should mount Azure Files like this:
 
-| Share Name | Mount Path | Purpose |
-|------------|------------|---------|
-| **config** | `/var/www/html/config` | Matomo config.ini.php persistence |
-| **plugins** | `/var/www/html/plugins` | Custom plugins, plugin persistence |
-| **tmp** | `/var/www/html/tmp` | Sessions, cache, logs |
-| **htaccess** | `/matomo_htaccess` | Custom .htaccess override |
+| Share Name   | Mount Path              | Purpose                            |
+| ------------ | ----------------------- | ---------------------------------- |
+| **config**   | `/var/www/html/config`  | Matomo config.ini.php persistence  |
+| **plugins**  | `/var/www/html/plugins` | Custom plugins, plugin persistence |
+| **tmp**      | `/var/www/html/tmp`     | Sessions, cache, logs              |
+| **htaccess** | `/matomo_htaccess`      | Custom .htaccess override          |
 
-The container detects the UID/GID of `/var/www/html/tmp` (Azure Files)  
+The container detects the UID/GID of `/var/www/html/tmp` (Azure Files)
 and automatically updates the runtime `www-data` user to match.
 
 This prevents the common Matomo error:
 
 ```text
 Session data file is not created by your uid
-````
+```
 
 ---
 
@@ -124,7 +145,6 @@ If you want to connect without SSL, you must:
 
 1. Open the **Server parameters** for your Azure Database for MySQL instance
 2. Set the `require_secure_transport` parameter to **OFF**
-
 3. Save / apply the change
 
-
+```
