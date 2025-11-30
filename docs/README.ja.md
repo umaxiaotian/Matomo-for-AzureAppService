@@ -1,5 +1,4 @@
 ![abe15ab0-a704-47c7-b61d-a07a5c28c5da](https://github.com/user-attachments/assets/e179ddd9-9343-4dca-8f9b-bdc784964f8e)
-
 # Matomo for Azure App Service Rebuild
 
 このコンテナイメージは、**Matomo** を **Azure App Service（Linux コンテナ）** 上で動作させるために特別に設計されており、以下に完全対応しています：
@@ -151,3 +150,4 @@ SSL なしで接続したい場合は：
 1. Azure Database for MySQL の **Server parameters** を開く
 2. `require_secure_transport` を **OFF** に設定
 3. 変更を保存・適用
+
