@@ -1,5 +1,9 @@
 name: Build & Push Matomo Image (GHCR)
 
+permissions:
+  contents: read
+  packages: write
+
 on:
   workflow_dispatch:
     inputs:
