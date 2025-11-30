@@ -99,7 +99,7 @@ jobs:
           GHCR_OWNER: ${{ github.repository_owner }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
           IMAGE_TAG: ${{ matrix.tag }}
-        uses: aquasecurity/trivy-action@v0.24.0
+        uses: aquasecurity/trivy-action@v0.2.4
         with:
           image-ref: ghcr.io/${{ env.GHCR_OWNER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format: json
