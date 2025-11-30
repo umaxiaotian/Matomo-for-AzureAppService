@@ -119,9 +119,11 @@ jobs:
           set -e
 
           total=$(jq '[.Results[].Vulnerabilities? // [] | length] | add // 0' trivy.json)
+          echo "Total HIGH/CRITICAL vulnerabilities for ${IMAGE_TAG}: ${total}"
           echo "total=$total" >> "$GITHUB_OUTPUT"
 
           if [ "$total" -eq 0 ]; then
+            echo "No HIGH/CRITICAL vulnerabilities. Skipping issue creation."
             exit 0
           fi
 
@@ -136,8 +138,6 @@ jobs:
 
           cat > trivy-report.md <<'EOF'
           # Container vulnerability report
-          
-          Image: `ghcr.io/${GHCR_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}`
           
           | Target | CVE | Package | Installed | Fixed | Severity |
           |--------|-----|---------|-----------|-------|----------|
