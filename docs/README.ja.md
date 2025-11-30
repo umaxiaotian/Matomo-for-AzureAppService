@@ -151,6 +151,3 @@ SSL なしで接続したい場合は：
 1. Azure Database for MySQL の **Server parameters** を開く
 2. `require_secure_transport` を **OFF** に設定
 3. 変更を保存・適用
-
-
-必要であれば、日本語版 README と英語版 README を同時に管理できるように書き出しもできます！
