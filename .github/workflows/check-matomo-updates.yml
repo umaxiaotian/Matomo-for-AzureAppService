@@ -46,15 +46,37 @@ jobs:
           GHCR_OWNER: ${{ github.repository_owner }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Fetching existing GHCR versions for $GHCR_OWNER/${IMAGE_NAME} ..."
+          echo "Detecting owner type for $GHCR_OWNER ..."
+          owner_resp=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${GHCR_OWNER}")
+
+          owner_type=$(echo "$owner_resp" | jq -r '.type // empty')
+
+          if [ "$owner_type" = "Organization" ]; then
+            echo "Owner is an Organization. Using /orgs API."
+            pkg_url="https://api.github.com/orgs/${GHCR_OWNER}/packages/container/${IMAGE_NAME}/versions?per_page=100"
+          else
+            echo "Owner is a User (or fallback). Using /users API."
+            pkg_url="https://api.github.com/users/${GHCR_OWNER}/packages/container/${IMAGE_NAME}/versions?per_page=100"
+          fi
+
+          echo "Fetching existing GHCR versions from: $pkg_url"
+
           resp=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/users/${GHCR_OWNER}/packages/container/${IMAGE_NAME}/versions?per_page=100")
+            "$pkg_url")
 
           echo "$resp" > ghcr-versions.json
 
-          if echo "$resp" | jq -e 'type == "array"' > /dev/null 2>&1; then
+          # パッケージが存在しない場合のメッセージを明示的にチェック
+          if echo "$resp" | jq -e '.message == "Package not found."' > /dev/null 2>&1; then
+            echo "Package not found on GHCR. Assuming no existing tags yet."
+            tags=""
+          # 正常に array（バージョンリスト）が返ってきた場合
+          elif echo "$resp" | jq -e 'type == "array"' > /dev/null 2>&1; then
             tags=$(echo "$resp" | jq -r '.[].metadata.container.tags[]' | sort -u)
           else
             echo "Warning: Unexpected response from GHCR API:"
@@ -68,6 +90,7 @@ jobs:
           # 改行 → スペース区切り
           tags_line=$(echo "$tags" | tr '\n' ' ')
           echo "tags=$tags_line" >> "$GITHUB_OUTPUT"
+
 
       # 3) 最新バージョンが GHCR に無ければ Issue を作成
       - name: Compare latest version with GHCR tags and create issue if needed
