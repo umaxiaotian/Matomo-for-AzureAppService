@@ -115,12 +115,23 @@ jobs:
 
           docker rm -f matomo-http-test || true
 
+      # 🔐 Trivy による脆弱性スキャン（HIGH/CRITICAL があれば失敗させる）
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: matomo-test:${{ github.sha }}
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          format: 'table'
+          exit-code: '1'   # ← HIGH/CRITICAL が1件でもあればジョブ失敗
+
   # =========================
   # 2) GHCR へ push
   # =========================
   push:
     runs-on: ubuntu-latest
-    needs: build-and-test   # ← テストが通ったらだけ実行
+    needs: build-and-test   # ← テスト + 脆弱性チェック通ったらだけ実行
 
     steps:
       - name: Checkout repository
