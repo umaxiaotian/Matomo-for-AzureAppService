@@ -1,141 +1,130 @@
-name: Check Matomo releases and create issue
+name: Check Matomo Release and Create Issue
 
 permissions:
   contents: read
-  issues: write
+  packages: read   # GHCR のバージョン一覧取得に必要
+  issues: write    # Issue 作成に必要
 
 on:
-  # 毎日 1回チェック（UTC 0時 / 日本時間09:00ごろ）
   schedule:
+    # 毎日 0:00 UTC に実行（1日おき監視のイメージでOK / 何もなければ何もしない）
     - cron: "0 0 * * *"
-  # 手動トリガーも可能
-  workflow_dispatch: {}
+  workflow_dispatch: {}  # 手動実行もできるようにしておく
+
+env:
+  IMAGE_NAME: matomo-appservice-rebuild
 
 jobs:
-  check-matomo-release:
+  check-and-issue:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # .env から現在の MATOMO_VERSION を取得
-      - name: Read current Matomo version from .env
-        id: current
+      # 1) Matomo のリリースフィードから最新バージョンを取得
+      - name: Get latest Matomo version from changelog feed
+        id: matomo
         run: |
-          if [ ! -f .env ]; then
-            echo "::error::.env not found. Cannot determine current Matomo version."
+          echo "Fetching Matomo changelog feed..."
+          latest=$(curl -s https://matomo.org/changelog/feed/ \
+            | grep -oP 'Matomo \K[0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | head -n1)
+
+          if [ -z "$latest" ]; then
+            echo "Failed to detect latest Matomo version from feed" >&2
             exit 1
           fi
 
-          MATOMO_VERSION=$(grep '^MATOMO_VERSION=' .env | head -n1 | cut -d= -f2 | tr -d '[:space:]')
-          if [ -z "$MATOMO_VERSION" ]; then
-            echo "::error::MATOMO_VERSION not found in .env"
-            exit 1
+          echo "Latest Matomo version detected: $latest"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+
+      # 2) GHCR にある既存タグ一覧を取得
+      - name: Get existing GHCR tags
+        id: ghcr
+        env:
+          GHCR_OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching existing GHCR versions for $GHCR_OWNER/${IMAGE_NAME} ..."
+          # ユーザーアカウント前提: /users/{owner}/packages/...
+          resp=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${GHCR_OWNER}/packages/container/${IMAGE_NAME}/versions?per_page=100")
+
+          echo "$resp" > ghcr-versions.json
+
+          if echo "$resp" | jq -e 'type == "array"' > /dev/null 2>&1; then
+            tags=$(echo "$resp" | jq -r '.[].metadata.container.tags[]' | sort -u)
+          else
+            echo "Warning: Unexpected response from GHCR API:"
+            cat ghcr-versions.json
+            tags=""
           fi
 
-          echo "Current Matomo version: $MATOMO_VERSION"
-          echo "matomo_version=$MATOMO_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Existing tags:"
+          echo "$tags"
 
-      # RSS から最新の Matomo バージョンを取得
-      - name: Fetch latest Matomo version from changelog feed
-        id: remote
+          # 改行区切り → スペース区切り
+          tags_line=$(echo "$tags" | tr '\n' ' ')
+          echo "tags=$tags_line" >> "$GITHUB_OUTPUT"
+
+      # 3) 新しいバージョンかどうか判定し、必要なら Issue を作成
+      - name: Compare latest version with GHCR tags and create issue if needed
+        env:
+          LATEST: ${{ steps.matomo.outputs.latest }}
+          TAGS_LINE: ${{ steps.ghcr.outputs.tags }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          python << 'PY'
-          import os, sys, re, urllib.request, xml.etree.ElementTree as ET
+          echo "Latest Matomo version: $LATEST"
+          echo "Existing tags: $TAGS_LINE"
 
-          url = "https://matomo.org/changelog/feed/"
-          try:
-            with urllib.request.urlopen(url, timeout=30) as resp:
-              data = resp.read()
-          except Exception as e:
-            print(f"::error::Failed to fetch RSS feed: {e}", file=sys.stderr)
-            sys.exit(1)
+          # すでに同じタグがあるなら何もしない
+          if echo " $TAGS_LINE " | grep -q " $LATEST "; then
+            echo "Tag $LATEST already exists in GHCR. No issue created."
+            exit 0
+          fi
 
-          try:
-            root = ET.fromstring(data)
-          except Exception as e:
-            print(f"::error::Failed to parse RSS XML: {e}", file=sys.stderr)
-            sys.exit(1)
+          echo "Tag $LATEST not found in GHCR. Checking existing issues..."
 
-          channel = root.find("channel")
-          if channel is None:
-            print("::error::RSS does not contain <channel>", file=sys.stderr)
-            sys.exit(1)
+          # 同じタイトルの Issue が既にあるかチェック（重複 Issue 防止）
+          issue_title="Matomo ${LATEST} is available"
+          existing=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues?state=open&per_page=100" \
+            | jq -r '.[].title' \
+            | grep -Fx "$issue_title" || true)
 
-          latest_version = None
-          # RSS の item タイトルから 1つ目の「x.y.z」を取る
-          for item in channel.findall("item"):
-            title = item.findtext("title") or ""
-            m = re.search(r"(\d+\.\d+\.\d+)", title)
-            if not m:
-              continue
-            latest_version = m.group(1)
-            break
+          if [ -n "$existing" ]; then
+            echo "Issue '$issue_title' already exists. Skipping creation."
+            exit 0
+          fi
 
-          if not latest_version:
-            print("::error::Could not find version number in RSS feed titles.", file=sys.stderr)
-            sys.exit(1)
+          echo "Creating new issue: $issue_title"
 
-          print(f"Latest Matomo version from RSS: {latest_version}")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-            f.write(f"latest_version={latest_version}\n")
-          PY
+          body=$(cat <<EOF
+A new Matomo version **${LATEST}** has been detected from the changelog feed.
 
-      # バージョンが違えば Issue を作成（重複チェック付き）
-      - name: Create issue if a new version is available
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const current = "${{ steps.current.outputs.matomo_version }}";
-            const latest  = "${{ steps.remote.outputs.latest_version }}";
+- Changelog feed: https://matomo.org/changelog/feed/
+- Current GHCR package: https://github.com/${REPO}/pkgs/container/${IMAGE_NAME}
 
-            if (!current || !latest) {
-              core.warning(`Missing version info. current='${current}', latest='${latest}'`);
-              return;
-            }
+Please build and push the container image tag:
 
-            if (current === latest) {
-              core.info(`Matomo is up-to-date (${current}).`);
-              return;
-            }
+\`\`\`
+ghcr.io/${REPO%%/*}/${IMAGE_NAME}:${LATEST}
+\`\`\`
 
-            const title = `Matomo update available: ${latest}`;
+(Triggered automatically by check-matomo-release workflow.)
+EOF
+)
 
-            // 既に同じタイトルの Issue があるかチェック（ラベルは依存系っぽく）
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: "open",
-              per_page: 100,
-            });
+          curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues" \
+            -d "$(jq -n --arg title "$issue_title" --arg body "$body" '{title: $title, body: $body}')"
 
-            if (issues.some(issue => issue.title === title)) {
-              core.info(`Issue for version ${latest} already exists.`);
-              return;
-            }
-
-            const bodyLines = [
-              `A new Matomo version has been released: **${latest}**.`,
-              "",
-              `Current version in this repo: \`${current}\`.`,
-              "",
-              "- Changelog: https://matomo.org/changelog/",
-              "- RSS feed: https://matomo.org/changelog/feed/",
-              "",
-              "To update:",
-              "1. Update `MATOMO_VERSION` in `.env`",
-              "2. Re-run the container build & push workflow",
-              "3. Deploy the new image to Azure App Service",
-            ];
-
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title,
-              body: bodyLines.join("\n"),
-              labels: ["dependencies", "matomo"]
-            });
-
-            core.info(`Created issue: ${title}`);
+          echo "Issue created."
