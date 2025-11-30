@@ -48,11 +48,11 @@ jobs:
           echo "Raw response:"
           cat resp.json
 
-          # tags を全部集めてユニーク化
+          # tags を全部集めてユニーク化し、1行のJSON配列にする（例: ["4.16.2","5.5.0",...])
           tags_json=$(jq -r '
             .[]
             | .metadata.container.tags[]?
-          ' resp.json 2>/dev/null | sort -u | jq -R . | jq -s .)
+          ' resp.json 2>/dev/null | sort -u | jq -R . | jq -s -c .)
 
           if [ -z "$tags_json" ] || [ "$tags_json" = "[]" ]; then
             echo "No tags found for ${GHCR_OWNER}/${GHCR_PACKAGE}."
