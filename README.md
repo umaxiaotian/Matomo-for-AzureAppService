@@ -147,4 +147,3 @@ If you want to connect without SSL, you must:
 2. Set the `require_secure_transport` parameter to **OFF**
 3. Save / apply the change
 
-```
