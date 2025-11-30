@@ -1,0 +1,57 @@
+name: Build & Push Matomo Image
+
+on:
+  # 手動実行用
+  workflow_dispatch:
+    inputs:
+      matomo_version:
+        description: "Matomo version (e.g. 5.6.1)"
+        required: true
+        default: "5.6.1"
+      php_memory_limit:
+        description: "PHP memory_limit (e.g. 256M)"
+        required: true
+        default: "256M"
+
+env:
+  IMAGE_NAME: matomo-appservice-rebuild
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 入力値から .env を生成（ローカル docker-compose と同じ形式）
+      - name: Generate .env file
+        run: |
+          cat <<EOF > .env
+          MATOMO_VERSION=${{ inputs.matomo_version }}
+          PHP_MEMORY_LIMIT=${{ inputs.php_memory_limit }}
+          EOF
+          echo ".env generated:"
+          cat .env
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}   # ex: umaxiaotian
+          password: ${{ secrets.DOCKERHUB_TOKEN }}      # Docker Hub アクセストークン
+
+      - name: Build and push to Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            MATOMO_VERSION=${{ inputs.matomo_version }}
+            PHP_MEMORY_LIMIT=${{ inputs.php_memory_limit }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ inputs.matomo_version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
