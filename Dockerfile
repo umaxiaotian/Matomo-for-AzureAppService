@@ -100,7 +100,8 @@ RUN chmod +x /docker-entrypoint.sh
 # php:apache のデフォルト WORKDIR は /var/www/html
 WORKDIR /var/www/html
 
-# App Service 側で /var/www/html や /var/www/html/tmp を Azure Files にマウントする想定
+# App Service 側で /var/www/html/config, /var/www/html/tmp, /var/www/html/plugins を
+# Azure Files にマウントして永続化する想定（アプリ本体は /usr/src/matomo に保持）
 VOLUME /var/www/html
 
 # Web は 80、SSH は 2222 を公開

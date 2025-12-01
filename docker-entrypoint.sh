@@ -35,6 +35,9 @@ WEBROOT="/var/www/html"
 TARGET="$WEBROOT/tmp"
 HTACCESS_SRC="/matomo_htaccess/.htaccess"
 HTACCESS_DEST="$WEBROOT/.htaccess"
+MATOMO_SRC="/usr/src/matomo"
+
+mkdir -p "$WEBROOT"
 
 # ===== Azure Files の UID/GID に www-data を合わせる =====
 if [ -d "$TARGET" ]; then
@@ -51,7 +54,49 @@ echo "Syncing www-data to UID=$actual_uid / GID=$actual_gid"
 groupmod -o -g "$actual_gid" www-data
 usermod  -o -u "$actual_uid" www-data
 
-# /var/www/html 全体の owner を www-data に
+# ===== Matomo アプリ本体は /usr/src/matomo に保持し、
+#        config / tmp / plugins だけを /var/www/html 配下に実体として置く =====
+if [ -d "$MATOMO_SRC" ]; then
+    # 1) config / tmp / plugins を /var/www/html に実体として用意
+    for dir in config tmp plugins; do
+        src="$MATOMO_SRC/$dir"
+        dest="$WEBROOT/$dir"
+
+        if [ ! -e "$dest" ]; then
+            if [ -e "$src" ]; then
+                echo "Initializing $dest from $src ..."
+                cp -a "$src" "$dest"
+            else
+                echo "Creating empty directory $dest ..."
+                mkdir -p "$dest"
+            fi
+        fi
+
+        # Matomo 本体側のディレクトリは /var/www/html 側へのシンボリックリンクに差し替え
+        if [ -e "$src" ] && [ ! -L "$src" ]; then
+            rm -rf "$src"
+            ln -s "$dest" "$src"
+        fi
+    done
+
+    # 2) /usr/src/matomo 以下のアプリ本体を /var/www/html へシンボリックリンクとして公開
+    #    （config / tmp / plugins は除外）
+    for item in "$MATOMO_SRC"/*; do
+        base="$(basename "$item")"
+        case "$base" in
+            config|tmp|plugins) continue ;;
+        esac
+
+        target="$WEBROOT/$base"
+        if [ ! -e "$target" ]; then
+            ln -s "$item" "$target"
+        fi
+    done
+else
+    echo "Warning: $MATOMO_SRC does not exist. Matomo source not found."
+fi
+
+# /var/www/html 全体の owner を www-data に（Azure Files 側の UID/GID に同期済み）
 chown -R www-data:www-data "$WEBROOT"
 
 # ===== SSHD の準備（ホスト鍵生成 + 起動） =====
@@ -74,35 +119,6 @@ fi
 
 echo "Starting sshd on port 2222..."
 /usr/sbin/sshd -D &
-
-# ===== Matomo 初回展開処理 =====
-if [ ! -e matomo.php ]; then
-    uid="$(id -u)"
-    gid="$(id -g)"
-    if [ "$uid" = '0' ]; then
-        case "$1" in
-            apache2*)
-                user="${APACHE_RUN_USER:-www-data}"
-                group="${APACHE_RUN_GROUP:-www-data}"
-
-                # strip off any '#' symbol ('#1000' is valid syntax for Apache)
-                user="${user#'#'}"
-                group="${group#'#'}"
-                ;;
-            *) # php-fpm を使う場合
-                user='www-data'
-                group='www-data'
-                ;;
-        esac
-    else
-        user="$uid"
-        group="$gid"
-    fi
-
-    echo "Extracting Matomo into $PWD..."
-    tar cf - --one-file-system -C /usr/src/matomo . | tar xf -
-    chown -R "$user":"$group" .
-fi
 
 # ===== /matomo_htaccess/.htaccess があれば、それを使う =====
 if [ -f "$HTACCESS_SRC" ]; then
