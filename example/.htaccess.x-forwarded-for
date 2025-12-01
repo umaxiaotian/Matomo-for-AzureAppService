@@ -1,16 +1,12 @@
 RewriteEngine On
 
-# ====== 許可したいIP（複数可） ======
+# ====== 許可したいIP ======
 SetEnvIf X-Forwarded-For ^203\.0\.113\.10(,|$) allow_ip
 SetEnvIf X-Forwarded-For ^198\.51\.100\.20(,|$) allow_ip
-# REMOTE_ADDR 直のアクセスも念のため許可
 SetEnvIf REMOTE_ADDR ^203\.0\.113\.10$ allow_ip
 SetEnvIf REMOTE_ADDR ^198\.51\.100\.20$ allow_ip
 
-# ====== index.php 以外は通す ======
-RewriteRule !^index\.php$ - [L]
-
-# ====== index.php へのアクセスのみ制限 ======
-# allow_ip が付いていない場合は 403
+# ====== index.php とその配下だけを制限 ======
+RewriteCond %{REQUEST_URI} ^/index\.php
 RewriteCond %{ENV:allow_ip} !^1$
 RewriteRule ^ - [F]
