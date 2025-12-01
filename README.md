@@ -1,4 +1,5 @@
 <img width="1536" height="1024" alt="matomo_bk" src="https://github.com/user-attachments/assets/e632623b-efff-4b53-befb-6b88ef63f879" />
+
 # Matomo for Azure App Service Rebuild
 
 This container image is designed specifically to run **Matomo** on **Azure App Service (Linux Containers)** with full compatibility for:
@@ -207,5 +208,6 @@ GitHub Actions workflow scans every published tag daily:
 * Creates GitHub Issues automatically when something is detected
 
 * Helps maintain long-term container security
+
 
 
