@@ -1,4 +1,4 @@
-<img width="1536" height="1024" alt="matomo_bk" src="https://github.com/user-attachments/assets/e632623b-efff-4b53-befb-6b88ef63f879" />
+<img alt="matomo_bk" src="https://github.com/user-attachments/assets/e632623b-efff-4b53-befb-6b88ef63f879" />
 
 # Matomo for Azure App Service Rebuild
 
@@ -208,6 +208,7 @@ GitHub Actions workflow scans every published tag daily:
 * Creates GitHub Issues automatically when something is detected
 
 * Helps maintain long-term container security
+
 
 
 
