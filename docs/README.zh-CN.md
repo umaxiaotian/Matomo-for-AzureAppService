@@ -1,4 +1,5 @@
-![abe15ab0-a704-47c7-b61d-a07a5c28c5da](https://github.com/user-attachments/assets/e179ddd9-9343-4dca-8f9b-bdc784964f8e)
+<img width="1536" height="1024" alt="matomo_bk" src="https://github.com/user-attachments/assets/e632623b-efff-4b53-befb-6b88ef63f879" />
+
 # Matomo for Azure 应用服务（App Service）重建版
 
 这个容器镜像专为在 **Azure 应用服务（Linux 容器）** 上运行 **Matomo** 而设计，并完全兼容以下功能：
