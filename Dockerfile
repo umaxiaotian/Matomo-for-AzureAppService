@@ -55,6 +55,10 @@ RUN set -ex; \
 # ==== Apache modules enable ====
 RUN a2enmod rewrite
 
+# ==== Apache ServerName を設定（警告抑止用）====
+RUN echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf \
+    && a2enconf servername
+
 # ==== PHP Opcache の推奨設定 ====
 RUN { \
         echo 'opcache.memory_consumption=128'; \
