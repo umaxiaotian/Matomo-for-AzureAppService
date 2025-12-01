@@ -2,9 +2,6 @@
 set -e
 
 # usage: file_env VAR [DEFAULT]
-#    ie: file_env 'XYZ_DB_PASSWORD' 'example'
-# (will allow for "$XYZ_DB_PASSWORD_FILE" to fill in the value of
-#  "$XYZ_DB_PASSWORD" from a file, especially for Docker's secrets feature)
 file_env() {
     local var="$1"
     local fileVar="${var}_FILE"
@@ -65,21 +62,30 @@ if [ -d "$MATOMO_SRC" ]; then
         src="$MATOMO_SRC/$dir"
         dest="$WEBROOT/$dir"
 
-        if [ ! -e "$dest" ]; then
-            if [ -e "$src" ]; then
-                echo "Initializing $dest from $src ..."
-                cp -a "$src" "$dest"
-            else
-                echo "Creating empty directory $dest ..."
+        if [ "$dir" = "tmp" ]; then
+            # tmp はコピーせず、毎回空を前提に Azure Files 側で使う
+            if [ ! -d "$dest" ]; then
+                echo "Creating tmp dir at $dest ..."
                 mkdir -p "$dest"
+            fi
+        else
+            # config / plugins はイメージから初期コピー
+            if [ ! -e "$dest" ]; then
+                if [ -e "$src" ]; then
+                    echo "Initializing $dest from $src ..."
+                    cp -a "$src" "$dest"
+                else
+                    echo "Creating empty directory $dest ..."
+                    mkdir -p "$dest"
+                fi
             fi
         fi
 
         # Matomo 本体側のディレクトリは /var/www/html 側へのシンボリックリンクに差し替え
         if [ -e "$src" ] && [ ! -L "$src" ]; then
             rm -rf "$src"
-            ln -s "$dest" "$src"
         fi
+        ln -snf "$dest" "$src"
     done
 
     # 2) /usr/src/matomo 以下のアプリ本体を /var/www/html へシンボリックリンクとして公開
@@ -96,17 +102,39 @@ if [ -d "$MATOMO_SRC" ]; then
         fi
     done
 
-    # 3) matomo.js の永続化とシンボリックリンク設定
+    # 3) tmp 配下に assets などを書き込み可能ディレクトリとして用意
+    TMP_DEST="$WEBROOT/tmp"
+    if [ -d "$TMP_DEST" ]; then
+        mkdir -p \
+            "$TMP_DEST/assets" \
+            "$TMP_DEST/cache" \
+            "$TMP_DEST/logs" \
+            "$TMP_DEST/tcpdf" \
+            "$TMP_DEST/templates_c" \
+            "$TMP_DEST/feed" \
+            "$TMP_DEST/latest" \
+            "$TMP_DEST/climulti" \
+            "$TMP_DEST/sessions"
+        # 書き込みできるようにパーミッション調整（Azure Files 側でも 0775/0777 想定）
+        chmod -R 0775 "$TMP_DEST" || true
+    fi
+
+    # 4) matomo.js の永続化とシンボリックリンク設定
     mkdir -p "$MATOMO_JS_DIR"
 
     SRC_JS="$MATOMO_SRC/matomo.js"
     PERSIST_JS="$MATOMO_JS_DIR/matomo.js"
     WEBROOT_JS="$WEBROOT/matomo.js"
 
-    # Azure Files 側に matomo.js がまだ無ければ、イメージの初期ファイルからコピー
     if [ -e "$SRC_JS" ] && [ ! -e "$PERSIST_JS" ]; then
         echo "Initializing persistent matomo.js at $PERSIST_JS from $SRC_JS ..."
         cp "$SRC_JS" "$PERSIST_JS"
+    fi
+
+    # イメージにも永続ディレクトリにも matomo.js が無い場合は、空ファイルを作っておく
+    if [ ! -e "$PERSIST_JS" ]; then
+        echo "No matomo.js found in image or persistent dir; creating empty $PERSIST_JS ..."
+        touch "$PERSIST_JS"
     fi
 
     # /usr/src/matomo/matomo.js を永続ファイルへのシンボリックリンクに差し替え
@@ -128,12 +156,10 @@ fi
 chown -R www-data:www-data "$WEBROOT"
 
 # ===== SSHD の準備（ホスト鍵生成 + 起動） =====
-# sshd_config で Port 2222, PermitRootLogin yes, PasswordAuthentication yes を指定済み
 if [ ! -d "/var/run/sshd" ]; then
     mkdir -p /var/run/sshd
 fi
 
-# ホスト鍵が存在しない場合のみ起動時に生成
 if command -v ssh-keygen >/dev/null 2>&1; then
     if ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
         echo "No SSH host keys found, generating with ssh-keygen -A..."
