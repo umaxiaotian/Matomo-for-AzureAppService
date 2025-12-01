@@ -36,7 +36,7 @@ This project integrates **Trivy (Aqua Security)** to ensure the image remains se
 Example scan command used in CI:
 
 ```bash
-trivy image --severity HIGH,CRITICAL --exit-code 1 ghcr.io/OWNER/matomo-appservice-rebuild:latest
+trivy image --severity HIGH,CRITICAL --exit-code 1 ghcr.io/umaxiaotian/matomo-appservice-rebuild:latest
 ```
 
 ---
@@ -205,4 +205,5 @@ GitHub Actions workflow scans every published tag daily:
 
 * Scans for **HIGH / CRITICAL** vulnerabilities
 * Creates GitHub Issues automatically when something is detected
+
 * Helps maintain long-term container security
