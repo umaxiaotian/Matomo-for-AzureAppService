@@ -20,7 +20,11 @@ RUN set -ex; \
         procps \
         curl \
         openssh-server \
+        sysstat \
     ; \
+    \
+    # sysstat を有効化（Debian は ENALBED=false のため）
+    sed -i 's/ENABLED="false"/ENABLED="true"/' /etc/default/sysstat; \
     \
     debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
@@ -44,11 +48,10 @@ RUN set -ex; \
     echo "root:Docker!" | chpasswd; \
     mkdir -p /var/run/sshd; \
     \
-    # ⚠ openssh-server の postinst が自動生成したホスト鍵を削除
-    #    → 実際の鍵生成は起動時の docker-entrypoint.sh に移譲
+    # openssh-server の自動生成鍵を削除
     rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub; \
     \
-    # ビルド用の依存を掃除
+    # ビルド用依存の掃除
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
     apt-get dist-clean
 
