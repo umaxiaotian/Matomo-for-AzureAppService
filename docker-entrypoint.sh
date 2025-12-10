@@ -9,6 +9,7 @@ file_env() {
     local varValue
     local fileVarValue
 
+    # set -e 環境なので grep 失敗時に落ちないようにする
     varValue=$(env | grep -E "^${var}=" | sed -E -e "s/^${var}=//") || true
     fileVarValue=$(env | grep -E "^${fileVar}=" | sed -E -e "s/^${fileVar}=//") || true
 
@@ -48,21 +49,33 @@ mkdir -p "$WEBROOT"
 mkdir -p "$PERSIST_ROOT"
 
 # ===== Azure Files の UID/GID に www-data を合わせる =====
-#   ※ Azure 側で /home にマウントしている想定なので、/home/matomo の UID/GID を見る
 if [ -d "$PERSIST_ROOT" ]; then
     actual_uid=$(stat -c "%u" "$PERSIST_ROOT")
     actual_gid=$(stat -c "%g" "$PERSIST_ROOT")
     echo "Azure Files detected UID/GID = $actual_uid:$actual_gid (at $PERSIST_ROOT)"
 else
-    echo "Warning: $PERSIST_ROOT does not exist, defaulting to UID/GID 1000"
+    echo "Warning: $PERSIST_ROOT does not exist, creating and using default UID/GID 1000"
+    mkdir -p "$PERSIST_ROOT"
     actual_uid=1000
     actual_gid=1000
-    mkdir -p "$PERSIST_ROOT"
 fi
 
-echo "Syncing www-data to UID=$actual_uid / GID=$actual_gid"
-groupmod -o -g "$actual_gid" www-data
-usermod  -o -u "$actual_uid" www-data
+orig_uid=$(id -u www-data)
+orig_gid=$(id -g www-data)
+echo "Current www-data UID/GID = $orig_uid:$orig_gid"
+
+# UID=0 (root) の場合は Apache を root で動かしたくないので remap しない
+if [ "$actual_uid" -eq 0 ]; then
+    echo "PERSIST_ROOT is owned by UID=0 (root); skip remapping www-data to avoid Apache running as root."
+else
+    if [ "$actual_uid" -eq "$orig_uid" ] && [ "$actual_gid" -eq "$orig_gid" ]; then
+        echo "www-data UID/GID already match persistent dir; no remap needed."
+    else
+        echo "Syncing www-data to UID=$actual_uid / GID=$actual_gid"
+        groupmod -o -g "$actual_gid" www-data
+        usermod  -o -u "$actual_uid" www-data
+    fi
+fi
 
 # ===== Matomo アプリ本体は /usr/src/matomo に保持し、
 #        config / tmp / plugins / matomo.js を /home/matomo 配下で永続化 =====
@@ -74,10 +87,22 @@ if [ -d "$APP_SRC" ]; then
         dest="$PERSIST_ROOT/$dir"
         web_dir="$WEBROOT/$dir"
 
-        # 永続ディレクトリを作成
-        if [ ! -d "$dest" ]; then
-            echo "Creating persistent dir at $dest ..."
-            mkdir -p "$dest"
+        # 永続ディレクトリ初期化
+        if [ "$dir" = "tmp" ]; then
+            # tmp は空でOK（Matomo が勝手に使う）
+            [ -d "$dest" ] || mkdir -p "$dest"
+        else
+            # config / plugins はイメージから初回コピー（既に中身があればそのまま）
+            if [ ! -d "$dest" ] || [ -z "$(ls -A "$dest" 2>/dev/null || true)" ]; then
+                if [ -d "$src_app" ]; then
+                    echo "Initializing persistent $dir at $dest from $src_app ..."
+                    mkdir -p "$(dirname "$dest")"
+                    cp -a "$src_app" "$dest"
+                else
+                    echo "Creating empty persistent dir $dest ..."
+                    mkdir -p "$dest"
+                fi
+            fi
         fi
 
         # Matomo 本体側のディレクトリを永続ディレクトリへのシンボリックリンクに差し替え
@@ -120,7 +145,6 @@ if [ -d "$APP_SRC" ]; then
             "$TMP_DEST/latest" \
             "$TMP_DEST/climulti" \
             "$TMP_DEST/sessions"
-        # 書き込みできるようにパーミッション調整（Azure Files 側でも 0775/0777 想定）
         chmod -R 0775 "$TMP_DEST" || true
     fi
 
