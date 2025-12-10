@@ -50,15 +50,7 @@ Configure Matomo database settings through **App Settings**:
 
 | Environment Variable                  | Purpose                                                |
 | ------------------------------------- | ------------------------------------------------------ |
-| `MATOMO_DATABASE_HOST`                | Database host                                          |
-| `MATOMO_DATABASE_NAME`                | Database name                                          |
-| `MATOMO_DATABASE_PASSWORD`            | Database password                                      |
-| `MATOMO_DATABASE_PORT`                | Database port                                          |
-| `MATOMO_DATABASE_USER`                | Database user                                          |
-| `WEBSITES_CONTAINER_START_TIME_LIMIT` | (optional) Increased startup timeout                   |
-| `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | Must be **false** when using custom Azure Files mounts |
-
-The entrypoint automatically consumes these values.
+| `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | Must be **true** |
 
 ---
 
@@ -66,58 +58,33 @@ The entrypoint automatically consumes these values.
 
 Mount Azure Files shares like this:
 
-| Share Name    | Mount Path                | Purpose                                   |
-| ------------- | ------------------------- | ----------------------------------------- |
-| **config**    | `/var/www/html/config`    | Matomo config.ini.php persistence         |
-| **plugins**   | `/var/www/html/plugins`   | Custom plugins                            |
-| **tmp**       | `/var/www/html/tmp`       | Cache, sessions, logs, asset generation   |
-| **matomo-js** | `/var/www/html/matomo-js` | Persistent JavaScript tracker (matomo.js) |
-| **htaccess**  | `/matomo_htaccess`        | Custom .htaccess override                 |
+| Share Name           | Mount Path            |
+| -------------------- | ---------------------- |
+| `matomo-data`        | `/home/matomo-data`    |
 
-The container then adjusts UID/GID of `www-data` to match the Azure Files mount, preventing errors like:
+Only **one** mount is required.
 
 ```
 Session data file is not created by your uid
 ```
 
----
+At startup, the entrypoint script:
 
-# 3️⃣ Persistent matomo.js Support
+1. Detects the UID/GID of the Azure Files mount and remaps `www-data` to match  
+2. Initializes directories under `/home/matomo-data/*` if they do not exist  
+3. Creates **symlinks** so that Matomo reads/writes through the unified persistent storage:
 
-Matomo rewrites:
+| Application Path               | Symlink Target                                   |
+| ------------------------------ | ------------------------------------------------- |
+| `/var/www/html/config`         | → `/home/matomo-data/config`                     |
+| `/var/www/html/plugins`        | → `/home/matomo-data/plugins`                    |
+| `/var/www/html/tmp`            | → `/home/matomo-data/tmp`                        |
+| `/var/www/html/matomo.js`      | → `/home/matomo-data/matomo-js/matomo.js`        |
+| `/usr/src/matomo/matomo.js`    | → `/home/matomo-data/matomo-js/matomo.js`        |
+| `/var/www/html/.htaccess`      | → `/home/matomo-data/htaccess/.htaccess`         |
 
-* `/usr/src/matomo/matomo.js`
-* `/var/www/html/matomo.js`
+This ensures **all stateful data is externalized**, while the Matomo core in `/usr/src/matomo` remains immutable and safe for upgrades.
 
-Because the application code is read-only inside the image, these files must be offloaded to a writable location.
-
-### ✔ Solution: dedicated mount `/var/www/html/matomo-js`
-
-The entrypoint performs:
-
-| Path                                | Behavior                                     |
-| ----------------------------------- | -------------------------------------------- |
-| `/var/www/html/matomo-js/matomo.js` | Real, writable persistent file (Azure Files) |
-| `/usr/src/matomo/matomo.js`         | Symlink → persistent file                    |
-| `/var/www/html/matomo.js`           | Symlink → persistent file                    |
-
-If no `matomo.js` exists anywhere, an **empty file is created**, ensuring Matomo does not crash.
-
----
-
-# 4️⃣ Custom `.htaccess` Support
-
-To override Matomo's default `.htaccess`, upload a file to:
-
-```
-/matomo_htaccess/.htaccess
-```
-
-The entrypoint will copy it to:
-
-```
-/var/www/html/.htaccess
-```
 
 Example usage:
 
@@ -208,6 +175,7 @@ GitHub Actions workflow scans every published tag daily:
 * Creates GitHub Issues automatically when something is detected
 
 * Helps maintain long-term container security
+
 
 
 
