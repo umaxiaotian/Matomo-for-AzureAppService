@@ -39,9 +39,6 @@ APP_SRC="/usr/src/matomo"
 # Azure Files を /home にマウントし、その中の /home/matomo を永続データ置き場にする
 PERSIST_ROOT="/home/matomo"
 
-# matomo.js 永続化用（実体）
-MATOMO_JS_PERSIST="$PERSIST_ROOT/matomo.js"
-
 HTACCESS_SRC="/matomo_htaccess/.htaccess"
 HTACCESS_DEST="$WEBROOT/.htaccess"
 
@@ -149,28 +146,32 @@ if [ -d "$APP_SRC" ]; then
     fi
 
     # 4) matomo.js の永続化とシンボリックリンク設定
+    JS_DIR="$PERSIST_ROOT/matomo-js"
+    mkdir -p "$JS_DIR"
+
+    MATOMO_JS_PERSIST="$JS_DIR/matomo.js"
     SRC_JS="$APP_SRC/matomo.js"
     WEBROOT_JS="$WEBROOT/matomo.js"
 
-    # 永続 matomo.js 実体の初期化
+    # 永続 matomo.js の初期化
     if [ -e "$SRC_JS" ] && [ ! -e "$MATOMO_JS_PERSIST" ]; then
         echo "Initializing persistent matomo.js at $MATOMO_JS_PERSIST from $SRC_JS ..."
         cp "$SRC_JS" "$MATOMO_JS_PERSIST"
     fi
 
-    # イメージにも永続ディレクトリにも matomo.js が無い場合は、空ファイルを作っておく
+    # 実体が存在しない場合は空ファイル生成
     if [ ! -e "$MATOMO_JS_PERSIST" ]; then
-        echo "No matomo.js found in image or persistent dir; creating empty $MATOMO_JS_PERSIST ..."
+        echo "Creating empty persistent matomo.js at $MATOMO_JS_PERSIST ..."
         touch "$MATOMO_JS_PERSIST"
     fi
 
-    # /usr/src/matomo/matomo.js を永続ファイルへのシンボリックリンクに差し替え
+    # /usr/src/matomo/matomo.js → 永続ディレクトリ
     if [ -e "$SRC_JS" ] && [ ! -L "$SRC_JS" ]; then
         rm -f "$SRC_JS"
     fi
     ln -sf "$MATOMO_JS_PERSIST" "$SRC_JS"
 
-    # Web ルート直下の matomo.js も永続ファイルへのシンボリックリンクにする
+    # /var/www/html/matomo.js → 永続ディレクトリ
     if [ -e "$WEBROOT_JS" ] && [ ! -L "$WEBROOT_JS" ]; then
         rm -f "$WEBROOT_JS"
     fi
