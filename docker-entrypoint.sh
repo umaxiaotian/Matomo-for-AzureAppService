@@ -36,10 +36,13 @@ file_env 'MATOMO_DATABASE_DBNAME'
 WEBROOT="/var/www/html"
 APP_SRC="/usr/src/matomo"
 
-# Azure Files を /home にマウントし、その中の /home/matomo を永続データ置き場にする
-PERSIST_ROOT="/home/matomo"
+# Azure Files を /home にマウントし、その中の /home/matomo-data を永続データ置き場にする
+PERSIST_ROOT="/home/matomo-data"
 
+# 旧: /matomo_htaccess/.htaccess から読み込む想定だったソース（ある場合は初期化に利用）
 HTACCESS_SRC="/matomo_htaccess/.htaccess"
+HTACCESS_PERSIST_DIR="$PERSIST_ROOT/htaccess"
+HTACCESS_PERSIST="$HTACCESS_PERSIST_DIR/.htaccess"
 HTACCESS_DEST="$WEBROOT/.htaccess"
 
 mkdir -p "$WEBROOT"
@@ -75,9 +78,9 @@ else
 fi
 
 # ===== Matomo アプリ本体は /usr/src/matomo に保持し、
-#        config / tmp / plugins / matomo.js を /home/matomo 配下で永続化 =====
+#        config / tmp / plugins / matomo.js を /home/matomo-data 配下で永続化 =====
 if [ -d "$APP_SRC" ]; then
-    # 1) /home/matomo/config /tmp /plugins を実体として用意し、
+    # 1) /home/matomo-data/config /tmp /plugins を実体として用意し、
     #    /usr/src/matomo と /var/www/html の両方からシンボリックリンクで参照する
     for dir in config tmp plugins; do
         src_app="$APP_SRC/$dir"
@@ -180,6 +183,29 @@ else
     echo "Warning: $APP_SRC does not exist. Matomo source not found."
 fi
 
+# ===== .htaccess の永続化とリンク設定 (/home/matomo-data 配下に保存) =====
+mkdir -p "$HTACCESS_PERSIST_DIR"
+
+if [ -f "$HTACCESS_SRC" ]; then
+    echo "Custom .htaccess source found at $HTACCESS_SRC"
+    if [ ! -f "$HTACCESS_PERSIST" ]; then
+        echo "Initializing persistent .htaccess at $HTACCESS_PERSIST from $HTACCESS_SRC ..."
+        cp "$HTACCESS_SRC" "$HTACCESS_PERSIST"
+    fi
+else
+    echo "No custom .htaccess source at $HTACCESS_SRC"
+    if [ ! -f "$HTACCESS_PERSIST" ]; then
+        echo "Creating empty persistent .htaccess at $HTACCESS_PERSIST ..."
+        touch "$HTACCESS_PERSIST"
+    fi
+fi
+
+# /var/www/html/.htaccess を永続ファイルへのシンボリックリンクにする
+if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
+    rm -f "$HTACCESS_DEST"
+fi
+ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
+
 # 永続ディレクトリと Web ルートの owner を www-data に
 chown -R www-data:www-data "$PERSIST_ROOT" "$WEBROOT"
 
@@ -201,15 +227,6 @@ fi
 
 echo "Starting sshd on port 2222..."
 /usr/sbin/sshd -D &
-
-# ===== /matomo_htaccess/.htaccess があれば、それを使う =====
-if [ -f "$HTACCESS_SRC" ]; then
-    echo "Custom .htaccess found at $HTACCESS_SRC, copying to $HTACCESS_DEST"
-    cp "$HTACCESS_SRC" "$HTACCESS_DEST"
-    chown www-data:www-data "$HTACCESS_DEST"
-else
-    echo "No custom .htaccess found at $HTACCESS_SRC, skipping copy."
-fi
 
 echo "Starting: $@"
 exec "$@"
