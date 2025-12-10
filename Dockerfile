@@ -23,7 +23,7 @@ RUN set -ex; \
         sysstat \
     ; \
     \
-    # sysstat を有効化（Debian は ENALBED=false のため）
+    # sysstat を有効化（Debian は ENABLED=false のため）
     sed -i 's/ENABLED="false"/ENABLED="true"/' /etc/default/sysstat; \
     \
     debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \
@@ -107,9 +107,9 @@ RUN chmod +x /docker-entrypoint.sh
 # php:apache のデフォルト WORKDIR は /var/www/html
 WORKDIR /var/www/html
 
-# App Service 側で /var/www/html を Azure Files にマウントし、
-# config / tmp / plugins を永続化する想定（アプリ本体は /usr/src/matomo に保持）
-VOLUME /var/www/html
+# App Service 側で /home を Azure Files にマウントし、
+# /home/matomo 以下に config / tmp / plugins / matomo.js を永続化する想定
+VOLUME /home
 
 # Web は 80、SSH は 2222 を公開
 EXPOSE 80 2222

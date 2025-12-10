@@ -6,8 +6,12 @@ file_env() {
     local var="$1"
     local fileVar="${var}_FILE"
     local def="${2:-}"
-    local varValue=$(env | grep -E "^${var}=" | sed -E -e "s/^${var}=//")
-    local fileVarValue=$(env | grep -E "^${fileVar}=" | sed -E -e "s/^${fileVar}=//")
+    local varValue
+    local fileVarValue
+
+    varValue=$(env | grep -E "^${var}=" | sed -E -e "s/^${var}=//") || true
+    fileVarValue=$(env | grep -E "^${fileVar}=" | sed -E -e "s/^${fileVar}=//") || true
+
     if [ -n "${varValue}" ] && [ -n "${fileVarValue}" ]; then
         echo >&2 "error: both $var and $fileVar are set (but are exclusive)"
         exit 1
@@ -29,25 +33,31 @@ file_env 'MATOMO_DATABASE_PASSWORD'
 file_env 'MATOMO_DATABASE_DBNAME'
 
 WEBROOT="/var/www/html"
-TARGET="$WEBROOT/tmp"
+APP_SRC="/usr/src/matomo"
+
+# Azure Files を /home にマウントし、その中の /home/matomo を永続データ置き場にする
+PERSIST_ROOT="/home/matomo"
+
+# matomo.js 永続化用（実体）
+MATOMO_JS_PERSIST="$PERSIST_ROOT/matomo.js"
+
 HTACCESS_SRC="/matomo_htaccess/.htaccess"
 HTACCESS_DEST="$WEBROOT/.htaccess"
-MATOMO_SRC="/usr/src/matomo"
-
-# matomo.js 永続化用ディレクトリ（ここに Azure Files をマウントする想定）
-MATOMO_JS_DIR="$WEBROOT/matomo-js"
 
 mkdir -p "$WEBROOT"
+mkdir -p "$PERSIST_ROOT"
 
 # ===== Azure Files の UID/GID に www-data を合わせる =====
-if [ -d "$TARGET" ]; then
-    actual_uid=$(stat -c "%u" "$TARGET")
-    actual_gid=$(stat -c "%g" "$TARGET")
-    echo "Azure Files detected UID/GID = $actual_uid:$actual_gid"
+#   ※ Azure 側で /home にマウントしている想定なので、/home/matomo の UID/GID を見る
+if [ -d "$PERSIST_ROOT" ]; then
+    actual_uid=$(stat -c "%u" "$PERSIST_ROOT")
+    actual_gid=$(stat -c "%g" "$PERSIST_ROOT")
+    echo "Azure Files detected UID/GID = $actual_uid:$actual_gid (at $PERSIST_ROOT)"
 else
-    echo "Warning: $TARGET does not exist, defaulting to UID/GID 1000"
+    echo "Warning: $PERSIST_ROOT does not exist, defaulting to UID/GID 1000"
     actual_uid=1000
     actual_gid=1000
+    mkdir -p "$PERSIST_ROOT"
 fi
 
 echo "Syncing www-data to UID=$actual_uid / GID=$actual_gid"
@@ -55,42 +65,37 @@ groupmod -o -g "$actual_gid" www-data
 usermod  -o -u "$actual_uid" www-data
 
 # ===== Matomo アプリ本体は /usr/src/matomo に保持し、
-#        config / tmp / plugins だけを /var/www/html 配下に実体として置く =====
-if [ -d "$MATOMO_SRC" ]; then
-    # 1) config / tmp / plugins を /var/www/html に実体として用意
+#        config / tmp / plugins / matomo.js を /home/matomo 配下で永続化 =====
+if [ -d "$APP_SRC" ]; then
+    # 1) /home/matomo/config /tmp /plugins を実体として用意し、
+    #    /usr/src/matomo と /var/www/html の両方からシンボリックリンクで参照する
     for dir in config tmp plugins; do
-        src="$MATOMO_SRC/$dir"
-        dest="$WEBROOT/$dir"
+        src_app="$APP_SRC/$dir"
+        dest="$PERSIST_ROOT/$dir"
+        web_dir="$WEBROOT/$dir"
 
-        if [ "$dir" = "tmp" ]; then
-            # tmp はコピーせず、毎回空を前提に Azure Files 側で使う
-            if [ ! -d "$dest" ]; then
-                echo "Creating tmp dir at $dest ..."
-                mkdir -p "$dest"
-            fi
-        else
-            # config / plugins はイメージから初期コピー
-            if [ ! -e "$dest" ]; then
-                if [ -e "$src" ]; then
-                    echo "Initializing $dest from $src ..."
-                    cp -a "$src" "$dest"
-                else
-                    echo "Creating empty directory $dest ..."
-                    mkdir -p "$dest"
-                fi
-            fi
+        # 永続ディレクトリを作成
+        if [ ! -d "$dest" ]; then
+            echo "Creating persistent dir at $dest ..."
+            mkdir -p "$dest"
         fi
 
-        # Matomo 本体側のディレクトリは /var/www/html 側へのシンボリックリンクに差し替え
-        if [ -e "$src" ] && [ ! -L "$src" ]; then
-            rm -rf "$src"
+        # Matomo 本体側のディレクトリを永続ディレクトリへのシンボリックリンクに差し替え
+        if [ -e "$src_app" ] && [ ! -L "$src_app" ]; then
+            rm -rf "$src_app"
         fi
-        ln -snf "$dest" "$src"
+        ln -snf "$dest" "$src_app"
+
+        # Web ルート側にも同じ永続ディレクトリへのシンボリックリンクを張る
+        if [ -e "$web_dir" ] && [ ! -L "$web_dir" ]; then
+            rm -rf "$web_dir"
+        fi
+        ln -snf "$dest" "$web_dir"
     done
 
     # 2) /usr/src/matomo 以下のアプリ本体を /var/www/html へシンボリックリンクとして公開
     #    （config / tmp / plugins / matomo.js は除外）
-    for item in "$MATOMO_SRC"/*; do
+    for item in "$APP_SRC"/*; do
         base="$(basename "$item")"
         case "$base" in
             config|tmp|plugins|matomo.js) continue ;;
@@ -103,7 +108,7 @@ if [ -d "$MATOMO_SRC" ]; then
     done
 
     # 3) tmp 配下に assets などを書き込み可能ディレクトリとして用意
-    TMP_DEST="$WEBROOT/tmp"
+    TMP_DEST="$PERSIST_ROOT/tmp"
     if [ -d "$TMP_DEST" ]; then
         mkdir -p \
             "$TMP_DEST/assets" \
@@ -120,40 +125,38 @@ if [ -d "$MATOMO_SRC" ]; then
     fi
 
     # 4) matomo.js の永続化とシンボリックリンク設定
-    mkdir -p "$MATOMO_JS_DIR"
-
-    SRC_JS="$MATOMO_SRC/matomo.js"
-    PERSIST_JS="$MATOMO_JS_DIR/matomo.js"
+    SRC_JS="$APP_SRC/matomo.js"
     WEBROOT_JS="$WEBROOT/matomo.js"
 
-    if [ -e "$SRC_JS" ] && [ ! -e "$PERSIST_JS" ]; then
-        echo "Initializing persistent matomo.js at $PERSIST_JS from $SRC_JS ..."
-        cp "$SRC_JS" "$PERSIST_JS"
+    # 永続 matomo.js 実体の初期化
+    if [ -e "$SRC_JS" ] && [ ! -e "$MATOMO_JS_PERSIST" ]; then
+        echo "Initializing persistent matomo.js at $MATOMO_JS_PERSIST from $SRC_JS ..."
+        cp "$SRC_JS" "$MATOMO_JS_PERSIST"
     fi
 
     # イメージにも永続ディレクトリにも matomo.js が無い場合は、空ファイルを作っておく
-    if [ ! -e "$PERSIST_JS" ]; then
-        echo "No matomo.js found in image or persistent dir; creating empty $PERSIST_JS ..."
-        touch "$PERSIST_JS"
+    if [ ! -e "$MATOMO_JS_PERSIST" ]; then
+        echo "No matomo.js found in image or persistent dir; creating empty $MATOMO_JS_PERSIST ..."
+        touch "$MATOMO_JS_PERSIST"
     fi
 
     # /usr/src/matomo/matomo.js を永続ファイルへのシンボリックリンクに差し替え
     if [ -e "$SRC_JS" ] && [ ! -L "$SRC_JS" ]; then
         rm -f "$SRC_JS"
     fi
-    ln -sf "$PERSIST_JS" "$SRC_JS"
+    ln -sf "$MATOMO_JS_PERSIST" "$SRC_JS"
 
     # Web ルート直下の matomo.js も永続ファイルへのシンボリックリンクにする
     if [ -e "$WEBROOT_JS" ] && [ ! -L "$WEBROOT_JS" ]; then
         rm -f "$WEBROOT_JS"
     fi
-    ln -sf "$PERSIST_JS" "$WEBROOT_JS"
+    ln -sf "$MATOMO_JS_PERSIST" "$WEBROOT_JS"
 else
-    echo "Warning: $MATOMO_SRC does not exist. Matomo source not found."
+    echo "Warning: $APP_SRC does not exist. Matomo source not found."
 fi
 
-# /var/www/html 全体の owner を www-data に（Azure Files 側の UID/GID に同期済み）
-chown -R www-data:www-data "$WEBROOT"
+# 永続ディレクトリと Web ルートの owner を www-data に
+chown -R www-data:www-data "$PERSIST_ROOT" "$WEBROOT"
 
 # ===== SSHD の準備（ホスト鍵生成 + 起動） =====
 if [ ! -d "/var/run/sshd" ]; then
