@@ -37,13 +37,11 @@ WEBROOT="/var/www/html"
 APP_SRC="/usr/src/matomo"
 PERSIST_ROOT="/home/matomo-data"
 
-mkdir -p "$WEBROOT"
-mkdir -p "$PERSIST_ROOT"
+mkdir -p "$WEBROOT" "$PERSIST_ROOT"
 
 # ===== Azure Files の UID/GID に www-data を合わせる =====
 # （chmod/chown はしない。プロセス側の UID/GID を合わせる）
 sync_www_data_ids() {
-    # root のときだけ変更可能
     if [ "$(id -u)" != "0" ]; then
         return 0
     fi
@@ -51,7 +49,6 @@ sync_www_data_ids() {
     actual_uid="$(stat -c "%u" "$PERSIST_ROOT" 2>/dev/null || true)"
     actual_gid="$(stat -c "%g" "$PERSIST_ROOT" 2>/dev/null || true)"
 
-    # 取れない場合はスキップ
     if [ -z "$actual_uid" ] || [ -z "$actual_gid" ]; then
         echo "Warning: cannot stat $PERSIST_ROOT uid/gid; skip remap."
         return 0
@@ -83,7 +80,6 @@ sync_www_data_ids() {
 sync_www_data_ids
 
 # ===== 初回のみ: Matomo 本体を /var/www/html に展開（ローカルなので速い）=====
-# 以降は /home/matomo-data 配下の永続データをリンクして運用
 if [ ! -e "$WEBROOT/matomo.php" ]; then
     if [ ! -d "$APP_SRC" ]; then
         echo "Error: $APP_SRC does not exist. Matomo source not found."
@@ -91,33 +87,23 @@ if [ ! -e "$WEBROOT/matomo.php" ]; then
     fi
 
     echo "Initializing Matomo into $WEBROOT from $APP_SRC ..."
-    # 元 entrypoint と同じ tar 展開
     tar cf - --one-file-system -C "$APP_SRC" . | tar xf - -C "$WEBROOT"
-
-    # chown は Azure Files で遅い/効かないことがあるので “やらない”
-    # （必要なら /var/www/html がローカルなのでここは軽いが、要件に合わせて削除）
 fi
 
 # ===== 永続化（全部 /home/matomo-data に集約）=====
-# Matomo が書き込む系を永続に逃がす（必要最小限。ここは好みで増やせる）
-# - config: 設定
-# - tmp: キャッシュ/ログ/セッション等
-# - plugins: 追加プラグインの永続化（※初回コピーが重いなら後で外すのが最速）
+# 書き込みが必要なものだけ永続へ逃がす
 for dir in config tmp plugins; do
     src_in_web="$WEBROOT/$dir"
     persist_dir="$PERSIST_ROOT/$dir"
 
     mkdir -p "$persist_dir"
 
-    # 初回だけ: Webroot 側に既存があり、永続が空なら永続へ移す（ローカル→Azure なので最小限に）
+    # 初回だけ: Webroot 側に既存があり、永続が空なら永続へ seed
     if [ -e "$src_in_web" ] && [ ! -L "$src_in_web" ]; then
         if [ -z "$(ls -A "$persist_dir" 2>/dev/null || true)" ]; then
             echo "Seeding persistent $dir from $src_in_web -> $persist_dir ..."
-            # cp -a より tar の方が速いことが多い
             (cd "$src_in_web" && tar cf - .) | (cd "$persist_dir" && tar xf -)
         fi
-
-        # Webroot 側は削除してリンクに置き換え
         rm -rf "$src_in_web"
     fi
 
@@ -135,25 +121,6 @@ mkdir -p \
     "$PERSIST_ROOT/tmp/latest" \
     "$PERSIST_ROOT/tmp/climulti" \
     "$PERSIST_ROOT/tmp/sessions"
-
-# ===== SSHD の準備（元のまま） =====
-if [ ! -d "/var/run/sshd" ]; then
-    mkdir -p /var/run/sshd
-fi
-
-if command -v ssh-keygen >/dev/null 2>&1; then
-    if ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
-        echo "No SSH host keys found, generating with ssh-keygen -A..."
-        ssh-keygen -A
-    else
-        echo "SSH host keys already exist, skipping generation."
-    fi
-else
-    echo "Warning: ssh-keygen not found; SSH host keys will not be generated."
-fi
-
-echo "Starting sshd on port 2222..."
-/usr/sbin/sshd -D &
 
 echo "Starting: $@"
 exec "$@"
