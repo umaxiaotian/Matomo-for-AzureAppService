@@ -27,7 +27,7 @@ file_env() {
     unset "$fileVar"
 }
 
-# DB 関連 env 読み込み
+# DB env（Matomo 公式互換のパターン）
 file_env 'MATOMO_DATABASE_HOST'
 file_env 'MATOMO_DATABASE_USERNAME'
 file_env 'MATOMO_DATABASE_PASSWORD'
@@ -40,8 +40,9 @@ PERSIST_ROOT="/home/matomo-data"
 mkdir -p "$WEBROOT" "$PERSIST_ROOT"
 
 # ===== Azure Files の UID/GID に www-data を合わせる =====
-# （chmod/chown はしない。プロセス側の UID/GID を合わせる）
+# chmod/chown はしない。プロセス側の UID/GID を合わせる。
 sync_www_data_ids() {
+    # root のときだけ変更可能
     if [ "$(id -u)" != "0" ]; then
         return 0
     fi
@@ -79,7 +80,7 @@ sync_www_data_ids() {
 
 sync_www_data_ids
 
-# ===== 初回のみ: Matomo 本体を /var/www/html に展開（ローカルなので速い）=====
+# ===== 初回のみ: Matomo 本体を /var/www/html に展開（ローカルなので高速）=====
 if [ ! -e "$WEBROOT/matomo.php" ]; then
     if [ ! -d "$APP_SRC" ]; then
         echo "Error: $APP_SRC does not exist. Matomo source not found."
@@ -90,15 +91,18 @@ if [ ! -e "$WEBROOT/matomo.php" ]; then
     tar cf - --one-file-system -C "$APP_SRC" . | tar xf - -C "$WEBROOT"
 fi
 
-# ===== 永続化（全部 /home/matomo-data に集約）=====
-# 書き込みが必要なものだけ永続へ逃がす
+# ===== 永続化は /home/matomo-data に集約 =====
+# Matomo が書き込む系（必要最小限）
+# - config: 設定
+# - tmp: キャッシュ/ログ/セッション等
+# - plugins: 追加プラグイン（※初回 seed が重いなら外すのが最速）
 for dir in config tmp plugins; do
     src_in_web="$WEBROOT/$dir"
     persist_dir="$PERSIST_ROOT/$dir"
 
     mkdir -p "$persist_dir"
 
-    # 初回だけ: Webroot 側に既存があり、永続が空なら永続へ seed
+    # 初回だけ: Webroot 側に実体があり、永続が空なら永続へ seed
     if [ -e "$src_in_web" ] && [ ! -L "$src_in_web" ]; then
         if [ -z "$(ls -A "$persist_dir" 2>/dev/null || true)" ]; then
             echo "Seeding persistent $dir from $src_in_web -> $persist_dir ..."
@@ -107,10 +111,11 @@ for dir in config tmp plugins; do
         rm -rf "$src_in_web"
     fi
 
+    # Webroot は永続へのリンクに置換
     ln -snf "$persist_dir" "$src_in_web"
 done
 
-# tmp 配下で Matomo が期待しがちなディレクトリは作っておく（chmod/chown はしない）
+# tmp 配下で Matomo が期待しがちなディレクトリ（chmod/chown はしない）
 mkdir -p \
     "$PERSIST_ROOT/tmp/assets" \
     "$PERSIST_ROOT/tmp/cache" \
