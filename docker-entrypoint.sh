@@ -1,7 +1,6 @@
 #!/bin/sh
 set -e
 
-# usage: file_env VAR [DEFAULT]
 file_env() {
     local var="$1"
     local fileVar="${var}_FILE"
@@ -9,7 +8,6 @@ file_env() {
     local varValue
     local fileVarValue
 
-    # set -e 環境なので grep 失敗時に落ちないようにする
     varValue=$(env | grep -E "^${var}=" | sed -E -e "s/^${var}=//") || true
     fileVarValue=$(env | grep -E "^${fileVar}=" | sed -E -e "s/^${fileVar}=//") || true
 
@@ -27,7 +25,6 @@ file_env() {
     unset "$fileVar"
 }
 
-# DB env（Matomo 公式互換のパターン）
 file_env 'MATOMO_DATABASE_HOST'
 file_env 'MATOMO_DATABASE_USERNAME'
 file_env 'MATOMO_DATABASE_PASSWORD'
@@ -39,10 +36,7 @@ PERSIST_ROOT="/home/matomo-data"
 
 mkdir -p "$WEBROOT" "$PERSIST_ROOT"
 
-# ===== Azure Files の UID/GID に www-data を合わせる =====
-# chmod/chown はしない。プロセス側の UID/GID を合わせる。
 sync_www_data_ids() {
-    # root のときだけ変更可能
     if [ "$(id -u)" != "0" ]; then
         return 0
     fi
@@ -52,12 +46,6 @@ sync_www_data_ids() {
 
     if [ -z "$actual_uid" ] || [ -z "$actual_gid" ]; then
         echo "Warning: cannot stat $PERSIST_ROOT uid/gid; skip remap."
-        return 0
-    fi
-
-    # 永続側が root 所有なら Apache を root で動かす事故を避ける
-    if [ "$actual_uid" -eq 0 ]; then
-        echo "PERSIST_ROOT owned by root; skip remap."
         return 0
     fi
 
@@ -73,36 +61,34 @@ sync_www_data_ids() {
         return 0
     fi
 
-    echo "Syncing www-data to UID=$actual_uid / GID=$actual_gid"
+    echo "PERSIST_ROOT UID/GID = $actual_uid:$actual_gid"
+    echo "Remapping www-data to UID=$actual_uid / GID=$actual_gid (even if 0:0)"
+
     command -v groupmod >/dev/null 2>&1 && groupmod -o -g "$actual_gid" www-data || true
     command -v usermod  >/dev/null 2>&1 && usermod  -o -u "$actual_uid" -g "$actual_gid" www-data || true
+
+    # apache env も念のため合わせる（apache2-foreground が参照）
+    export APACHE_RUN_USER=www-data
+    export APACHE_RUN_GROUP=www-data
 }
 
 sync_www_data_ids
 
-# ===== 初回のみ: Matomo 本体を /var/www/html に展開（ローカルなので高速）=====
 if [ ! -e "$WEBROOT/matomo.php" ]; then
     if [ ! -d "$APP_SRC" ]; then
-        echo "Error: $APP_SRC does not exist. Matomo source not found."
+        echo "Error: $APP_SRC does not exist."
         exit 1
     fi
-
     echo "Initializing Matomo into $WEBROOT from $APP_SRC ..."
     tar cf - --one-file-system -C "$APP_SRC" . | tar xf - -C "$WEBROOT"
 fi
 
-# ===== 永続化は /home/matomo-data に集約 =====
-# Matomo が書き込む系（必要最小限）
-# - config: 設定
-# - tmp: キャッシュ/ログ/セッション等
-# - plugins: 追加プラグイン（※初回 seed が重いなら外すのが最速）
 for dir in config tmp plugins; do
     src_in_web="$WEBROOT/$dir"
     persist_dir="$PERSIST_ROOT/$dir"
 
     mkdir -p "$persist_dir"
 
-    # 初回だけ: Webroot 側に実体があり、永続が空なら永続へ seed
     if [ -e "$src_in_web" ] && [ ! -L "$src_in_web" ]; then
         if [ -z "$(ls -A "$persist_dir" 2>/dev/null || true)" ]; then
             echo "Seeding persistent $dir from $src_in_web -> $persist_dir ..."
@@ -111,11 +97,9 @@ for dir in config tmp plugins; do
         rm -rf "$src_in_web"
     fi
 
-    # Webroot は永続へのリンクに置換
     ln -snf "$persist_dir" "$src_in_web"
 done
 
-# tmp 配下で Matomo が期待しがちなディレクトリ（chmod/chown はしない）
 mkdir -p \
     "$PERSIST_ROOT/tmp/assets" \
     "$PERSIST_ROOT/tmp/cache" \
