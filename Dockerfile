@@ -6,115 +6,105 @@ ARG PHP_MEMORY_LIMIT
 ENV MATOMO_VERSION=${MATOMO_VERSION} \
     PHP_MEMORY_LIMIT=${PHP_MEMORY_LIMIT}
 
-# ==== PHP拡張 & SSH のインストール ====
+
+FROM php:8.4-apache
+
+ENV PHP_MEMORY_LIMIT=256M
+
 RUN set -ex; \
-    savedAptMark="$(apt-mark showmanual)"; \
-    \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-        libfreetype-dev \
-        libjpeg-dev \
-        libldap2-dev \
-        libpng-dev \
-        libzip-dev \
-        procps \
-        curl \
-        openssh-server \
-        sysstat \
-    ; \
-    \
-    # sysstat を有効化（Debian は ENABLED=false のため）
-    sed -i 's/ENABLED="false"/ENABLED="true"/' /etc/default/sysstat; \
-    \
-    debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \
-    docker-php-ext-configure gd --with-freetype --with-jpeg; \
-    docker-php-ext-configure ldap --with-libdir="lib/$debMultiarch"; \
-    docker-php-ext-install -j "$(nproc)" \
-        gd \
-        bcmath \
-        ldap \
-        mysqli \
-        pdo_mysql \
-        zip \
-    ; \
-    \
-    # PECL 拡張
-    pecl install APCu-5.1.27; \
-    pecl install redis-6.3.0; \
-    docker-php-ext-enable apcu redis; \
-    rm -r /tmp/pear; \
-    \
-    # SSH のセットアップ（root/Docker!, ポート2222用）
-    echo "root:Docker!" | chpasswd; \
-    mkdir -p /var/run/sshd; \
-    \
-    # openssh-server の自動生成鍵を削除
-    rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub; \
-    \
-    # ビルド用依存の掃除
-    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
-    apt-get dist-clean
+	\
+	savedAptMark="$(apt-mark showmanual)"; \
+	\
+	apt-get update; \
+	apt-get install -y --no-install-recommends \
+		libfreetype-dev \
+		libjpeg-dev \
+		libldap2-dev \
+		libpng-dev \
+		libzip-dev \
+		procps \
+	; \
+	\
+	debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \
+	docker-php-ext-configure gd --with-freetype --with-jpeg; \
+	docker-php-ext-configure ldap --with-libdir="lib/$debMultiarch"; \
+	docker-php-ext-install -j "$(nproc)" \
+		gd \
+		bcmath \
+		ldap \
+		mysqli \
+		pdo_mysql \
+		zip \
+	; \
+	\
+# pecl will claim success even if one install fails, so we need to perform each install separately
+	pecl install APCu-5.1.28; \
+	pecl install redis-6.3.0; \
+	\
+	docker-php-ext-enable \
+		apcu \
+		redis \
+	; \
+	rm -r /tmp/pear; \
+	\
+# reset apt-mark's "manual" list so that "purge --auto-remove" will remove all build dependencies
+	apt-mark auto '.*' > /dev/null; \
+	apt-mark manual $savedAptMark; \
+	ldd "$(php -r 'echo ini_get("extension_dir");')"/*.so \
+		| awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) { next }; gsub("^/(usr/)?", "", so); print so }' \
+		| sort -u \
+		| xargs -rt dpkg-query --search \
+# https://manpages.debian.org/trixie/dpkg/dpkg-query.1.en.html#S (we ignore diversions and it'll be really unusual for more than one package to provide any given .so file)
+		| awk 'sub(":$", "", $1) { print $1 }' \
+		| sort -u \
+		| xargs -rt apt-mark manual; \
+	\
+	apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
+	apt-get dist-clean
 
-# ==== Apache modules enable ====
-RUN a2enmod rewrite
-
-# ==== Apache ServerName を設定（警告抑止用）====
-RUN echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf \
-    && a2enconf servername
-
-# ==== PHP Opcache の推奨設定 ====
+# set recommended PHP.ini settings
+# see https://secure.php.net/manual/en/opcache.installation.php
 RUN { \
-        echo 'opcache.memory_consumption=128'; \
-        echo 'opcache.interned_strings_buffer=8'; \
-        echo 'opcache.max_accelerated_files=4000'; \
-        echo 'opcache.revalidate_freq=2'; \
-        echo 'opcache.fast_shutdown=1'; \
-    } > /usr/local/etc/php/conf.d/opcache-recommended.ini
+		echo 'opcache.memory_consumption=128'; \
+		echo 'opcache.interned_strings_buffer=8'; \
+		echo 'opcache.max_accelerated_files=4000'; \
+		echo 'opcache.revalidate_freq=2'; \
+		echo 'opcache.fast_shutdown=1'; \
+	} > /usr/local/etc/php/conf.d/opcache-recommended.ini
 
-# ==== Matomo 本体を取得（このステップ内で gnupg/dirmngr を一時インストール） ====
+ENV MATOMO_VERSION 5.6.2
+
 RUN set -ex; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends gnupg dirmngr; \
-    \
-    curl -fsSL -o matomo.tar.gz \
-        "https://builds.matomo.org/matomo-${MATOMO_VERSION}.tar.gz"; \
-    curl -fsSL -o matomo.tar.gz.asc \
-        "https://builds.matomo.org/matomo-${MATOMO_VERSION}.tar.gz.asc"; \
-    \
-    export GNUPGHOME="$(mktemp -d)"; \
-    gpg --batch --keyserver keyserver.ubuntu.com --recv-keys F529A27008477483777FC23D63BB30D0E5D2C749; \
-    gpg --batch --verify matomo.tar.gz.asc matomo.tar.gz; \
-    gpgconf --kill all; \
-    rm -rf "$GNUPGHOME" matomo.tar.gz.asc; \
-    \
-    tar -xzf matomo.tar.gz -C /usr/src/; \
-    rm matomo.tar.gz; \
-    \
-    # 使い終わったら gnupg/dirmngr を削除
-    apt-get purge -y --auto-remove gnupg dirmngr; \
-    apt-get dist-clean
+	fetchDeps=" \
+		dirmngr \
+		gnupg \
+	"; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends \
+		$fetchDeps \
+	; \
+	\
+	curl -fsSL -o matomo.tar.gz \
+		"https://builds.matomo.org/matomo-${MATOMO_VERSION}.tar.gz"; \
+	curl -fsSL -o matomo.tar.gz.asc \
+		"https://builds.matomo.org/matomo-${MATOMO_VERSION}.tar.gz.asc"; \
+	export GNUPGHOME="$(mktemp -d)"; \
+	gpg --batch --keyserver keyserver.ubuntu.com --recv-keys F529A27008477483777FC23D63BB30D0E5D2C749; \
+	gpg --batch --verify matomo.tar.gz.asc matomo.tar.gz; \
+	gpgconf --kill all; \
+	rm -rf "$GNUPGHOME" matomo.tar.gz.asc; \
+	tar -xzf matomo.tar.gz -C /usr/src/; \
+	rm matomo.tar.gz; \
+	apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false $fetchDeps; \
+	apt-get dist-clean
 
-# ==== Matomo 用 PHP 設定 ====
 COPY php.ini /usr/local/etc/php/conf.d/php-matomo.ini
 
-# ==== SSH サーバ設定（Port 2222 など） ====
-COPY sshd_config /etc/ssh/sshd_config
+COPY docker-entrypoint.sh /entrypoint.sh
 
-# ==== エントリポイント ====
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# WORKDIR is /var/www/html (inherited via "FROM php")
+# "/entrypoint.sh" will populate it at container startup from /usr/src/matomo
+VOLUME /var/www/html
 
-# php:apache のデフォルト WORKDIR は /var/www/html
-WORKDIR /var/www/html
-
-# App Service 側で /home を Azure Files にマウントし、
-# /home/matomo 以下に config / tmp / plugins / matomo.js を永続化する想定
-VOLUME /home
-
-# Web は 80、SSH は 2222 を公開
-EXPOSE 80 2222
-
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["apache2-foreground"]
-
-
