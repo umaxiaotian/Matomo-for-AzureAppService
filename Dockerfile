@@ -106,5 +106,6 @@ COPY docker-entrypoint.sh /entrypoint.sh
 # "/entrypoint.sh" will populate it at container startup from /usr/src/matomo
 VOLUME /var/www/html
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["apache2-foreground"]
+
