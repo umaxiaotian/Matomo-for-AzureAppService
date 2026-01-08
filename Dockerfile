@@ -114,6 +114,7 @@ VOLUME /home
 # Web は 80、SSH は 2222 を公開
 EXPOSE 80 2222
 
-# ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["apache2-foreground"]
+
 
