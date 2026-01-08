@@ -71,38 +71,46 @@ jobs:
             fi
           done
 
-      # 超簡易 HTTP スモークテスト
       - name: HTTP smoke test (apache + matomo)
         run: |
           set -e
 
-          # バックグラウンドでコンテナ起動
+          # 永続用の named volume を用意（CI内）
+          docker volume create matomo_data >/dev/null
+
+          # volume 内を www-data(33:33) 所有にする（※コンテナ側で chown したくないので、ここでやる）
+          docker run --rm -v matomo_data:/home/matomo-data busybox sh -lc '
+            mkdir -p /home/matomo-data &&
+            chown -R 33:33 /home/matomo-data
+          '
+
+          # バックグラウンドでコンテナ起動（永続 volume を /home/matomo-data にマウント）
           docker run -d --name matomo-http-test \
             -p 8080:80 \
+            -v matomo_data:/home/matomo-data \
             matomo-test:${{ github.sha }}
 
           echo "Waiting for container to be ready..."
-          # 必要なら秒数増やす
-          sleep 40
+          # 初回展開があるので少し待つ
+          for i in $(seq 1 60); do
+            if curl -sS -o /tmp/index.html -w "%{http_code}" http://localhost:8080/ | grep -qE '^(200|302)$'; then
+              break
+            fi
+            sleep 2
+          done
 
           echo "Requesting http://localhost:8080/ ..."
           http_status=$(curl -sS -o /tmp/index.html -w "%{http_code}" http://localhost:8080/ || echo "000")
           echo "HTTP status: $http_status"
 
-          if [ "$http_status" != "200" ]; then
-            echo "ERROR: Expected HTTP 200 but got $http_status"
+          if [ "$http_status" != "200" ] && [ "$http_status" != "302" ]; then
+            echo "ERROR: Expected HTTP 200/302 but got $http_status"
             echo "===== /tmp/index.html (if any) ====="
             cat /tmp/index.html || true
             echo "===== Container logs ====="
             docker logs matomo-http-test || true
             docker rm -f matomo-http-test || true
             exit 1
-          fi
-
-          # HTML の中に Matomo っぽい文言があるかザックリ確認（ゆるいチェック）
-          if ! grep -qi "Matomo" /tmp/index.html; then
-            echo "WARNING: 'Matomo' keyword not found in index.html"
-            # ここで失敗にしたければ exit 1 にする
           fi
 
           echo "===== /tmp/index.html (head) ====="
