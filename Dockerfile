@@ -1,125 +1,118 @@
-# syntax=docker/dockerfile:1.7
 FROM php:8.4-apache
 
-ARG MATOMO_VERSION=5.6.1
-ENV MATOMO_VERSION=${MATOMO_VERSION}
+ARG MATOMO_VERSION
+ARG PHP_MEMORY_LIMIT
 
-# Apache 設定（必要なら調整）
-RUN set -eux; \
-    a2enmod rewrite headers expires remoteip
+ENV MATOMO_VERSION=${MATOMO_VERSION} \
+    PHP_MEMORY_LIMIT=${PHP_MEMORY_LIMIT}
 
-# ---- PHP extensions build deps & runtime deps ----
-RUN set -eux; \
+# ==== PHP拡張 & SSH のインストール ====
+RUN set -ex; \
+    savedAptMark="$(apt-mark showmanual)"; \
+    \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      ca-certificates \
-      curl \
-      dpkg-dev \
-      file \
-      g++ \
-      gcc \
-      make \
-      pkg-config \
-      re2c \
-      xz-utils \
-      zlib1g-dev \
-      libzip-dev \
-      libpng-dev \
-      libjpeg62-turbo-dev \
-      libfreetype6-dev \
-      libldap2-dev \
-      libssl-dev \
-      libzstd-dev \
-      liblzma-dev \
-      libonig-dev \
-      libsasl2-dev \
-      libicu-dev \
-      gnupg \
-      dirmngr \
+        libfreetype-dev \
+        libjpeg-dev \
+        libldap2-dev \
+        libpng-dev \
+        libzip-dev \
+        procps \
+        curl \
+        openssh-server \
+        sysstat \
     ; \
-    rm -rf /var/lib/apt/lists/*
-
-# ---- PHP core extensions ----
-RUN set -eux; \
+    \
+    # sysstat を有効化（Debian は ENABLED=false のため）
+    sed -i 's/ENABLED="false"/ENABLED="true"/' /etc/default/sysstat; \
+    \
+    debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
-    docker-php-ext-install -j"$(nproc)" \
-      bcmath \
-      gd \
-      ldap \
-      mysqli \
-      pdo_mysql \
-      zip \
-      opcache
-
-# ---- PECL extensions: apcu, redis ----
-RUN set -eux; \
-    pecl install apcu-5.1.28; \
+    docker-php-ext-configure ldap --with-libdir="lib/$debMultiarch"; \
+    docker-php-ext-install -j "$(nproc)" \
+        gd \
+        bcmath \
+        ldap \
+        mysqli \
+        pdo_mysql \
+        zip \
+    ; \
+    \
+    # PECL 拡張
+    pecl install APCu-5.1.27; \
     pecl install redis-6.3.0; \
-    docker-php-ext-enable apcu redis
+    docker-php-ext-enable apcu redis; \
+    rm -r /tmp/pear; \
+    \
+    # SSH のセットアップ（root/Docker!, ポート2222用）
+    echo "root:Docker!" | chpasswd; \
+    mkdir -p /var/run/sshd; \
+    \
+    # openssh-server の自動生成鍵を削除
+    rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub; \
+    \
+    # ビルド用依存の掃除
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
+    apt-get dist-clean
 
-# ---- PHP ini tweaks ----
-RUN set -eux; \
-    { \
-      echo "memory_limit=256M"; \
-    } > /usr/local/etc/php/conf.d/php-matomo.ini
+# ==== Apache modules enable ====
+RUN a2enmod rewrite
 
-RUN set -eux; \
-    { \
-      echo "opcache.memory_consumption=128"; \
-      echo "opcache.interned_strings_buffer=8"; \
-      echo "opcache.max_accelerated_files=4000"; \
-      echo "opcache.revalidate_freq=2"; \
-      echo "opcache.fast_shutdown=1"; \
+# ==== Apache ServerName を設定（警告抑止用）====
+RUN echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf \
+    && a2enconf servername
+
+# ==== PHP Opcache の推奨設定 ====
+RUN { \
+        echo 'opcache.memory_consumption=128'; \
+        echo 'opcache.interned_strings_buffer=8'; \
+        echo 'opcache.max_accelerated_files=4000'; \
+        echo 'opcache.revalidate_freq=2'; \
+        echo 'opcache.fast_shutdown=1'; \
     } > /usr/local/etc/php/conf.d/opcache-recommended.ini
 
-# ---- download & verify Matomo (GPG) ----
-RUN set -eux; \
-    curl -fsSL -o /tmp/matomo.tar.gz "https://builds.matomo.org/matomo-${MATOMO_VERSION}.tar.gz"; \
-    curl -fsSL -o /tmp/matomo.tar.gz.asc "https://builds.matomo.org/matomo-${MATOMO_VERSION}.tar.gz.asc"; \
+# ==== Matomo 本体を取得（このステップ内で gnupg/dirmngr を一時インストール） ====
+RUN set -ex; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gnupg dirmngr; \
+    \
+    curl -fsSL -o matomo.tar.gz \
+        "https://builds.matomo.org/matomo-${MATOMO_VERSION}.tar.gz"; \
+    curl -fsSL -o matomo.tar.gz.asc \
+        "https://builds.matomo.org/matomo-${MATOMO_VERSION}.tar.gz.asc"; \
+    \
     export GNUPGHOME="$(mktemp -d)"; \
     gpg --batch --keyserver keyserver.ubuntu.com --recv-keys F529A27008477483777FC23D63BB30D0E5D2C749; \
-    gpg --batch --verify /tmp/matomo.tar.gz.asc /tmp/matomo.tar.gz; \
+    gpg --batch --verify matomo.tar.gz.asc matomo.tar.gz; \
     gpgconf --kill all; \
-    rm -rf "$GNUPGHOME" /tmp/matomo.tar.gz.asc; \
-    mkdir -p /usr/src; \
-    tar -xzf /tmp/matomo.tar.gz -C /usr/src/; \
-    rm -f /tmp/matomo.tar.gz; \
-    test -f /usr/src/matomo/matomo.php; \
-    chown -R www-data:www-data /usr/src/matomo
+    rm -rf "$GNUPGHOME" matomo.tar.gz.asc; \
+    \
+    tar -xzf matomo.tar.gz -C /usr/src/; \
+    rm matomo.tar.gz; \
+    \
+    # 使い終わったら gnupg/dirmngr を削除
+    apt-get purge -y --auto-remove gnupg dirmngr; \
+    apt-get dist-clean
 
-# ---- entrypoint ----
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN set -eux; \
-    chmod +x /usr/local/bin/docker-entrypoint.sh
+# ==== Matomo 用 PHP 設定 ====
+COPY php.ini /usr/local/etc/php/conf.d/php-matomo.ini
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+# ==== SSH サーバ設定（Port 2222 など） ====
+COPY sshd_config /etc/ssh/sshd_config
+
+# ==== エントリポイント ====
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# php:apache のデフォルト WORKDIR は /var/www/html
+WORKDIR /var/www/html
+
+# App Service 側で /home を Azure Files にマウントし、
+# /home/matomo 以下に config / tmp / plugins / matomo.js を永続化する想定
+VOLUME /home
+
+# Web は 80、SSH は 2222 を公開
+EXPOSE 80 2222
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["apache2-foreground"]
-
-# ---- cleanup build deps (optional) ----
-# ここで消してOK（Matomo取得・検証はすでに完了しているため）
-RUN set -eux; \
-    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
-      dpkg-dev \
-      file \
-      g++ \
-      gcc \
-      make \
-      pkg-config \
-      re2c \
-      xz-utils \
-      zlib1g-dev \
-      libzip-dev \
-      libpng-dev \
-      libjpeg62-turbo-dev \
-      libfreetype6-dev \
-      libldap2-dev \
-      libssl-dev \
-      libzstd-dev \
-      liblzma-dev \
-      libonig-dev \
-      libsasl2-dev \
-      libicu-dev \
-      gnupg \
-      dirmngr \
-    ; \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
