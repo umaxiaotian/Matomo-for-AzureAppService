@@ -78,10 +78,7 @@ else
 fi
 
 # ===== Matomo アプリ本体は /usr/src/matomo に保持し、
-#        config / tmp / plugins / matomo.js を /home/matomo-data 配下で永続化 =====
 if [ -d "$APP_SRC" ]; then
-    # 1) /home/matomo-data/config /tmp /plugins を実体として用意し、
-    #    /usr/src/matomo と /var/www/html の両方からシンボリックリンクで参照する
     for dir in config tmp plugins; do
         src_app="$APP_SRC/$dir"
         dest="$PERSIST_ROOT/$dir"
@@ -92,7 +89,6 @@ if [ -d "$APP_SRC" ]; then
             # tmp は空でOK（Matomo が勝手に使う）
             [ -d "$dest" ] || mkdir -p "$dest"
         else
-            # config / plugins はイメージから初回コピー（既に中身があればそのまま）
             if [ ! -d "$dest" ] || [ -z "$(ls -A "$dest" 2>/dev/null || true)" ]; then
                 if [ -d "$src_app" ]; then
                     echo "Initializing persistent $dir at $dest from $src_app ..."

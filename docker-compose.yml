@@ -6,3 +6,43 @@ services:
       args:
         MATOMO_VERSION: ${MATOMO_VERSION}
         PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT}
+    container_name: matomo
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+      - "2222:2222"
+    environment:
+      TZ: Asia/Tokyo
+      MATOMO_DATABASE_HOST: mysql
+      MATOMO_DATABASE_USERNAME: ${MYSQL_USER}
+      MATOMO_DATABASE_PASSWORD: ${MYSQL_PASSWORD}
+      MATOMO_DATABASE_DBNAME: ${MYSQL_DATABASE}
+      MATOMO_DATABASE_ADAPTER: mysql
+      MATOMO_DATABASE_TABLES_PREFIX: matomo_
+    volumes:
+      - ./matomo-data:/home/matomo-data
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: matomo-mysql
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    environment:
+      TZ: Asia/Tokyo
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - ./mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
