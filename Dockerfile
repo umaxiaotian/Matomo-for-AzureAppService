@@ -21,7 +21,7 @@ RUN set -ex; \
       openssh-server \
       sysstat \
     ; \
-    rm -rf /var/lib/apt/lists/* \
+    rm -rf /var/lib/apt/lists/*; \
     sed -i 's/ENABLED="false"/ENABLED="true"/' /etc/default/sysstat; \
     \
     debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \
@@ -35,16 +35,13 @@ RUN set -ex; \
         pdo_mysql \
         zip \
     ; \
-    \
     pecl install APCu-5.1.27; \
     pecl install redis-6.3.0; \
     docker-php-ext-enable apcu redis; \
     rm -r /tmp/pear; \
-    \
     echo "root:Docker!" | chpasswd; \
     mkdir -p /var/run/sshd; \
     rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub; \
-    \
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
     apt-get dist-clean
 
