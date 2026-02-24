@@ -1,0 +1,156 @@
+name: Build & Test & Push Matomo Image (DockerHub)
+
+on:
+  push:
+    branches:
+      - 8-plugins-bundle-to-container-image
+  workflow_dispatch:
+    inputs:
+      matomo_version:
+        description: "Matomo version (e.g. 5.6.1)"
+        required: true
+        default: "5.6.1"
+      php_memory_limit:
+        description: "PHP memory_limit (e.g. 256M)"
+        required: true
+        default: "256M"
+
+env:
+  IMAGE_NAME: matomo-appservice-rebuild
+  # push トリガー時のデフォルト値
+  DEFAULT_MATOMO_VERSION: "5.6.1"
+  DEFAULT_PHP_MEMORY_LIMIT: "256M"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate .env file
+        run: |
+          cat <<EOF > .env
+          MATOMO_VERSION=${{ github.event.inputs.matomo_version || env.DEFAULT_MATOMO_VERSION }}
+          PHP_MEMORY_LIMIT=${{ github.event.inputs.php_memory_limit || env.DEFAULT_PHP_MEMORY_LIMIT }}
+          EOF
+          echo ".env generated:"
+          cat .env
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image for test (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          build-args: |
+            MATOMO_VERSION=${{ github.event.inputs.matomo_version || env.DEFAULT_MATOMO_VERSION }}
+            PHP_MEMORY_LIMIT=${{ github.event.inputs.php_memory_limit || env.DEFAULT_PHP_MEMORY_LIMIT }}
+          tags: |
+            matomo-test:${{ github.sha }}
+
+      - name: Simple PHP extension check
+        run: |
+          set -e
+          echo "== php -m =="
+          docker run --rm matomo-test:${{ github.sha }} php -m
+
+          echo "== check required extensions =="
+          for ext in gd mysqli pdo_mysql bcmath zip redis apcu; do
+            echo "Checking extension: $ext"
+            if ! docker run --rm matomo-test:${{ github.sha }} php -m | grep -q "$ext"; then
+              echo "ERROR: PHP extension '$ext' not found."
+              exit 1
+            fi
+          done
+
+      - name: HTTP smoke test (apache + matomo)
+        run: |
+          set -e
+          docker run -d --name matomo-http-test \
+            -p 8080:80 \
+            matomo-test:${{ github.sha }}
+
+          echo "Waiting for container to be ready..."
+          sleep 40
+
+          echo "Requesting http://localhost:8080/ ..."
+          http_status=$(curl -sS -o /tmp/index.html -w "%{http_code}" http://localhost:8080/ || echo "000")
+          echo "HTTP status: $http_status"
+
+          if [ "$http_status" != "200" ]; then
+            echo "ERROR: Expected HTTP 200 but got $http_status"
+            echo "===== /tmp/index.html (if any) ====="
+            cat /tmp/index.html || true
+            echo "===== Container logs ====="
+            docker logs matomo-http-test || true
+            docker rm -f matomo-http-test || true
+            exit 1
+          fi
+
+          if ! grep -qi "Matomo" /tmp/index.html; then
+            echo "WARNING: 'Matomo' keyword not found in index.html"
+          fi
+
+          echo "===== /tmp/index.html (head) ====="
+          head -n 50 /tmp/index.html || true
+
+          echo "===== Container logs ====="
+          docker logs matomo-http-test || true
+
+          docker rm -f matomo-http-test || true
+
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: matomo-test:${{ github.sha }}
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          format: 'table'
+          exit-code: '1'
+
+  push:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate .env file
+        run: |
+          cat <<EOF > .env
+          MATOMO_VERSION=${{ github.event.inputs.matomo_version || env.DEFAULT_MATOMO_VERSION }}
+          PHP_MEMORY_LIMIT=${{ github.event.inputs.php_memory_limit || env.DEFAULT_PHP_MEMORY_LIMIT }}
+          EOF
+          echo ".env generated:"
+          cat .env
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push to Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            MATOMO_VERSION=${{ github.event.inputs.matomo_version || env.DEFAULT_MATOMO_VERSION }}
+            PHP_MEMORY_LIMIT=${{ github.event.inputs.php_memory_limit || env.DEFAULT_PHP_MEMORY_LIMIT }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.matomo_version || env.DEFAULT_MATOMO_VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:develop-plugins

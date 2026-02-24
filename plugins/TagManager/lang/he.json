@@ -1,0 +1,14 @@
+{
+    "TagManager": {
+        "CategoryClicks": "לחיצות",
+        "CategoryDate": "תאריך",
+        "CategoryEmail": "אימייל",
+        "CategoryErrors": "שגיאות",
+        "EtrackerTagTransactionCurrencyTitle": "מטבע",
+        "InvalidDebugUrlError": "שגיאה",
+        "MatomoConfigurationMatomoUserIdTitle": "User ID",
+        "MatomoTagEcommerceViewPrice": "מחיר",
+        "PageUrlVariableName": "כתובת העמוד",
+        "Version": "גרסה"
+    }
+}

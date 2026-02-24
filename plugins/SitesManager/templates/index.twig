@@ -1,0 +1,13 @@
+{% extends 'admin.twig' %}
+
+{% set title %}{{ 'SitesManager_WebsitesManagement'|translate }}{% endset %}
+
+{% block content %}
+
+    <div
+        vue-entry="SitesManager.SitesManagement"
+        roll-up-enabled="{{ rollUpEnabled|json_encode }}"
+        privacy-manager-enabled="{{ privacyManagerEnabled|json_encode }}"
+    ></div>
+
+{% endblock %}

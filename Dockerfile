@@ -23,7 +23,6 @@ RUN set -ex; \
         sysstat \
     ; \
     \
-    # sysstat を有効化（Debian は ENABLED=false のため）
     sed -i 's/ENABLED="false"/ENABLED="true"/' /etc/default/sysstat; \
     \
     debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \
@@ -38,31 +37,23 @@ RUN set -ex; \
         zip \
     ; \
     \
-    # PECL 拡張
     pecl install APCu-5.1.27; \
     pecl install redis-6.3.0; \
     docker-php-ext-enable apcu redis; \
     rm -r /tmp/pear; \
     \
-    # SSH のセットアップ（root/Docker!, ポート2222用）
     echo "root:Docker!" | chpasswd; \
     mkdir -p /var/run/sshd; \
-    \
-    # openssh-server の自動生成鍵を削除
     rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub; \
     \
-    # ビルド用依存の掃除
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
     apt-get dist-clean
 
-# ==== Apache modules enable ====
 RUN a2enmod rewrite
 
-# ==== Apache ServerName を設定（警告抑止用）====
 RUN echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf \
     && a2enconf servername
 
-# ==== PHP Opcache の推奨設定 ====
 RUN { \
         echo 'opcache.memory_consumption=128'; \
         echo 'opcache.interned_strings_buffer=8'; \
@@ -90,12 +81,15 @@ RUN set -ex; \
     tar -xzf matomo.tar.gz -C /usr/src/; \
     rm matomo.tar.gz; \
     \
-    # 使い終わったら gnupg/dirmngr を削除
     apt-get purge -y --auto-remove gnupg dirmngr; \
     apt-get dist-clean
 
 # ==== Matomo 用 PHP 設定 ====
 COPY php.ini /usr/local/etc/php/conf.d/php-matomo.ini
+
+# ==== (追加) plugins をイメージにバンドル ====
+COPY plugins/ /usr/src/matomo/plugins/
+RUN chown -R www-data:www-data /usr/src/matomo/plugins || true
 
 # ==== SSH サーバ設定（Port 2222 など） ====
 COPY sshd_config /etc/ssh/sshd_config
@@ -104,14 +98,10 @@ COPY sshd_config /etc/ssh/sshd_config
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-# php:apache のデフォルト WORKDIR は /var/www/html
 WORKDIR /var/www/html
 
-# App Service 側で /home を Azure Files にマウントし、
-# /home/matomo 以下に config / tmp / plugins / matomo.js を永続化する想定
 VOLUME /home
 
-# Web は 80、SSH は 2222 を公開
 EXPOSE 80 2222
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
