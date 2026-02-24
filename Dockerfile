@@ -8,21 +8,20 @@ ENV MATOMO_VERSION=${MATOMO_VERSION} \
 
 # ==== PHP拡張 & SSH のインストール ====
 RUN set -ex; \
-    savedAptMark="$(apt-mark showmanual)"; \
-    \
     apt-get update; \
+    apt-get -y upgrade; \
     apt-get install -y --no-install-recommends \
-        libfreetype-dev \
-        libjpeg-dev \
-        libldap2-dev \
-        libpng-dev \
-        libzip-dev \
-        procps \
-        curl \
-        openssh-server \
-        sysstat \
+      libfreetype-dev \
+      libjpeg-dev \
+      libldap2-dev \
+      libpng-dev \
+      libzip-dev \
+      procps \
+      curl \
+      openssh-server \
+      sysstat \
     ; \
-    \
+    rm -rf /var/lib/apt/lists/* \
     sed -i 's/ENABLED="false"/ENABLED="true"/' /etc/default/sysstat; \
     \
     debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \
