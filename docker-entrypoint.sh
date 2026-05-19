@@ -203,28 +203,25 @@ else
     echo "Warning: $APP_SRC does not exist. Matomo source not found."
 fi
 
-# ===== .htaccess の永続化とリンク設定 (/home/matomo-data 配下に保存) =====
-mkdir -p "$HTACCESS_PERSIST_DIR"
-
+# ===== .htaccess のリンク設定 =====
+# カスタムソースがある場合のみ Azure Files に永続化してシンボリックリンクを上書き。
+# それ以外は APP_SRC ループで作成済みの /usr/src/matomo/.htaccess へのシンボリックリンクを使う。
+# （空ファイルで上書きすると Azure Files のパーミッション問題で Apache が 403 を返す）
 if [ -f "$HTACCESS_SRC" ]; then
     echo "Custom .htaccess source found at $HTACCESS_SRC"
+    mkdir -p "$HTACCESS_PERSIST_DIR"
     if [ ! -f "$HTACCESS_PERSIST" ]; then
         echo "Initializing persistent .htaccess at $HTACCESS_PERSIST from $HTACCESS_SRC ..."
         cp "$HTACCESS_SRC" "$HTACCESS_PERSIST"
     fi
-else
-    echo "No custom .htaccess source at $HTACCESS_SRC"
-    if [ ! -f "$HTACCESS_PERSIST" ]; then
-        echo "Creating empty persistent .htaccess at $HTACCESS_PERSIST ..."
-        touch "$HTACCESS_PERSIST"
+    if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
+        rm -f "$HTACCESS_DEST"
     fi
+    ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
+else
+    echo "No custom .htaccess; using Matomo's built-in .htaccess from image"
+    # /var/www/html/.htaccess → /usr/src/matomo/.htaccess は APP_SRC ループで作成済み
 fi
-
-# /var/www/html/.htaccess を永続ファイルへのシンボリックリンクにする
-if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
-    rm -f "$HTACCESS_DEST"
-fi
-ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
 
 # actual_uid=0 はローカルディスク環境（CI など）: chown が有効なので再帰実行
 # actual_uid!=0 は Azure Files 環境: UID remap 済みで chown は SMB no-op のためスキップ
