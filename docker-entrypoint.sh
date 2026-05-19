@@ -204,24 +204,32 @@ else
 fi
 
 # ===== .htaccess のリンク設定 =====
-# カスタムソースがある場合のみ Azure Files に永続化してシンボリックリンクを上書き。
-# それ以外は APP_SRC ループで作成済みの /usr/src/matomo/.htaccess へのシンボリックリンクを使う。
-# （空ファイルで上書きすると Azure Files のパーミッション問題で Apache が 403 を返す）
+# Matomo 同梱の .htaccess は Options FollowSymLinks を無効化するため使用しない。
+# 空ファイルを用意して Apache がデフォルトの FollowSymLinks を維持できるようにする。
+# カスタム .htaccess が必要な場合は HTACCESS_SRC (/matomo_htaccess/.htaccess) で提供する。
+mkdir -p "$HTACCESS_PERSIST_DIR"
+chmod 755 "$HTACCESS_PERSIST_DIR"
+
 if [ -f "$HTACCESS_SRC" ]; then
     echo "Custom .htaccess source found at $HTACCESS_SRC"
-    mkdir -p "$HTACCESS_PERSIST_DIR"
     if [ ! -f "$HTACCESS_PERSIST" ]; then
         echo "Initializing persistent .htaccess at $HTACCESS_PERSIST from $HTACCESS_SRC ..."
         cp "$HTACCESS_SRC" "$HTACCESS_PERSIST"
     fi
-    if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
-        rm -f "$HTACCESS_DEST"
-    fi
-    ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
 else
-    echo "No custom .htaccess; using Matomo's built-in .htaccess from image"
-    # /var/www/html/.htaccess → /usr/src/matomo/.htaccess は APP_SRC ループで作成済み
+    echo "No custom .htaccess source; creating empty .htaccess"
+    if [ ! -f "$HTACCESS_PERSIST" ]; then
+        touch "$HTACCESS_PERSIST"
+    fi
 fi
+
+# umask に関わらず Apache (www-data) が読めるよう明示的に権限を設定
+chmod 644 "$HTACCESS_PERSIST"
+
+if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
+    rm -f "$HTACCESS_DEST"
+fi
+ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
 
 # actual_uid=0 はローカルディスク環境（CI など）: chown が有効なので再帰実行
 # actual_uid!=0 は Azure Files 環境: UID remap 済みで chown は SMB no-op のためスキップ
