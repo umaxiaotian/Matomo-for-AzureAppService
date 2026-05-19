@@ -64,9 +64,16 @@ RUN echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf \
     && a2enconf servername
 
 # ==== Matomo 用 Apache Directory 設定 ====
-# /var/www/html 以下はシンボリックリンク構成のため FollowSymLinks を明示。
-# Debian 13 (Trixie) の php:apache では FollowSymLinks がデフォルトで有効でないため必要。
+# /var/www/html はシンボリックリンク構成。FollowSymLinks を明示する。
+# シンボリックリンクの実体は /usr/src/matomo/ に置かれるが、Debian の apache2.conf にある
+# <Directory /> の Require all denied がドキュメントルート外へのアクセスを拒否するため、
+# /usr/src/matomo/ を明示的に Require all granted する必要がある。
 RUN { \
+        echo '<Directory /usr/src/matomo>'; \
+        echo '    Options FollowSymLinks'; \
+        echo '    AllowOverride None'; \
+        echo '    Require all granted'; \
+        echo '</Directory>'; \
         echo '<Directory /var/www/html>'; \
         echo '    Options FollowSymLinks'; \
         echo '    AllowOverride All'; \
