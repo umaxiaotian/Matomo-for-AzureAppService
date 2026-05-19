@@ -132,6 +132,11 @@ if [ -d "$APP_SRC" ]; then
         fi
     done
 
+    # js/ ディレクトリの所有者を www-data に設定（Matomo システムチェック要件）
+    if [ -d "$APP_SRC/js" ]; then
+        chown -R www-data:www-data "$APP_SRC/js"
+    fi
+
     # 3) tmp 配下に assets などを書き込み可能ディレクトリとして用意
     TMP_DEST="$PERSIST_ROOT/tmp"
     if [ -d "$TMP_DEST" ]; then
@@ -206,8 +211,10 @@ if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
 fi
 ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
 
-# 永続ディレクトリと Web ルートの owner を www-data に
+# 永続ディレクトリ・Web ルート・APP_SRC ディレクトリ自体の owner を www-data に
+# （APP_SRC 直下は js/ のみ再帰済み。ここでは親ディレクトリのみ）
 chown -R www-data:www-data "$PERSIST_ROOT" "$WEBROOT"
+chown www-data:www-data "$APP_SRC"
 
 # ===== SSHD の準備（ホスト鍵生成 + 起動） =====
 if [ ! -d "/var/run/sshd" ]; then
