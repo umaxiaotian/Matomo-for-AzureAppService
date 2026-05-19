@@ -33,16 +33,14 @@ file_env 'MATOMO_DATABASE_USERNAME'
 file_env 'MATOMO_DATABASE_PASSWORD'
 file_env 'MATOMO_DATABASE_DBNAME'
 
-WEBROOT="/var/www/html"
+# DocumentRoot = /usr/src/matomo（Apache が実ファイルを直接参照）
 APP_SRC="/usr/src/matomo"
 
 # Azure Files を /home にマウントし、その中の /home/matomo-data を永続データ置き場にする
 PERSIST_ROOT="/home/matomo-data"
 
 HTACCESS_SRC="/matomo_htaccess/.htaccess"
-HTACCESS_DEST="$WEBROOT/.htaccess"
 
-mkdir -p "$WEBROOT"
 mkdir -p "$PERSIST_ROOT"
 
 # ===== Azure Files の UID/GID に www-data を合わせる =====
@@ -74,17 +72,15 @@ else
     fi
 fi
 
-# ===== Matomo アプリ本体は /usr/src/matomo に保持し、
+# ===== Matomo アプリ本体は /usr/src/matomo に保持し（= DocumentRoot）、
 #        config / plugins / matomo.js / logs を /home/matomo-data 配下で永続化
 #        tmp（cache/sessions 等）はローカルディスクに置いて高速化 =====
 if [ -d "$APP_SRC" ]; then
-    # 1) /home/matomo-data/config /plugins を実体として用意し、
-    #    /usr/src/matomo と /var/www/html の両方からシンボリックリンクで参照する
-    #    tmp は Azure Files ではなくローカルディスクに置く（後述）
+    # 1) config / plugins を /home/matomo-data 配下で永続化し、
+    #    /usr/src/matomo/{config,plugins} から symlink で参照
     for dir in config plugins; do
         src_app="$APP_SRC/$dir"
         dest="$PERSIST_ROOT/$dir"
-        web_dir="$WEBROOT/$dir"
 
         # config / plugins はイメージから初回コピー（既に中身があればそのまま）
         if [ ! -d "$dest" ] || [ -z "$(ls -A "$dest" 2>/dev/null || true)" ]; then
@@ -98,31 +94,11 @@ if [ -d "$APP_SRC" ]; then
             fi
         fi
 
-        # Matomo 本体側のディレクトリを永続ディレクトリへのシンボリックリンクに差し替え
+        # Matomo 本体側のディレクトリを永続ディレクトリへの symlink に差し替え
         if [ -e "$src_app" ] && [ ! -L "$src_app" ]; then
             rm -rf "$src_app"
         fi
         ln -snf "$dest" "$src_app"
-
-        # Web ルート側にも同じ永続ディレクトリへのシンボリックリンクを張る
-        if [ -e "$web_dir" ] && [ ! -L "$web_dir" ]; then
-            rm -rf "$web_dir"
-        fi
-        ln -snf "$dest" "$web_dir"
-    done
-
-    # 2) /usr/src/matomo 以下のアプリ本体を /var/www/html へシンボリックリンクとして公開
-    #    （config / tmp / plugins / matomo.js は除外）
-    for item in "$APP_SRC"/*; do
-        base="$(basename "$item")"
-        case "$base" in
-            config|tmp|plugins|matomo.js) continue ;;
-        esac
-
-        target="$WEBROOT/$base"
-        if [ ! -e "$target" ]; then
-            ln -s "$item" "$target"
-        fi
     done
 
     # js/ ディレクトリの所有者を www-data に設定（Matomo システムチェック要件）
@@ -130,7 +106,7 @@ if [ -d "$APP_SRC" ]; then
         chown -R www-data:www-data "$APP_SRC/js"
     fi
 
-    # 3) tmp はローカルディスクに置き、logs だけ Azure Files (永続) へシンボリックリンク
+    # 2) tmp はローカルディスクに置き、logs だけ Azure Files (永続) へ symlink
     #    Azure Files 上の tmp は SMB レイテンシで遅いため、キャッシュ/セッション等をローカル化
     LOCAL_TMP="/tmp/matomo-tmp"
     LOGS_PERSIST="$PERSIST_ROOT/logs"
@@ -158,23 +134,15 @@ if [ -d "$APP_SRC" ]; then
     fi
     ln -snf "$LOCAL_TMP" "$src_tmp"
 
-    # $WEBROOT/tmp → ローカル tmp
-    web_tmp="$WEBROOT/tmp"
-    if [ -e "$web_tmp" ] && [ ! -L "$web_tmp" ]; then
-        rm -rf "$web_tmp"
-    fi
-    ln -snf "$LOCAL_TMP" "$web_tmp"
-
-    # 4) matomo.js の永続化とシンボリックリンク設定
+    # 3) matomo.js の永続化と symlink
     JS_DIR="$PERSIST_ROOT/matomo-js"
     mkdir -p "$JS_DIR"
 
     MATOMO_JS_PERSIST="$JS_DIR/matomo.js"
     SRC_JS="$APP_SRC/matomo.js"
-    WEBROOT_JS="$WEBROOT/matomo.js"
 
     # 永続 matomo.js の初期化
-    if [ -e "$SRC_JS" ] && [ ! -e "$MATOMO_JS_PERSIST" ]; then
+    if [ -e "$SRC_JS" ] && [ ! -L "$SRC_JS" ] && [ ! -e "$MATOMO_JS_PERSIST" ]; then
         echo "Initializing persistent matomo.js at $MATOMO_JS_PERSIST from $SRC_JS ..."
         cp "$SRC_JS" "$MATOMO_JS_PERSIST"
     fi
@@ -191,37 +159,27 @@ if [ -d "$APP_SRC" ]; then
     fi
     ln -sf "$MATOMO_JS_PERSIST" "$SRC_JS"
 
-    # /var/www/html/matomo.js → 永続ディレクトリ
-    if [ -e "$WEBROOT_JS" ] && [ ! -L "$WEBROOT_JS" ]; then
-        rm -f "$WEBROOT_JS"
-    fi
-    ln -sf "$MATOMO_JS_PERSIST" "$WEBROOT_JS"
 else
     echo "Warning: $APP_SRC does not exist. Matomo source not found."
 fi
 
 # ===== .htaccess の設定 =====
-# Azure Files 経由のシンボリックリンクは CI / Azure 両環境でパーミッション問題が発生するため、
-# /var/www/html に直接実ファイルとして作成する。
-# カスタム .htaccess が必要な場合は HTACCESS_SRC (/matomo_htaccess/.htaccess) をボリュームマウントで提供する。
-# APP_SRC ループが作成した /usr/src/matomo/.htaccess へのシンボリックリンクは実ファイルで上書きする。
-rm -f "$HTACCESS_DEST"
+# カスタム .htaccess が必要な場合は HTACCESS_SRC (/matomo_htaccess/.htaccess) を
+# ボリュームマウントで提供する。未指定時は Matomo 同梱の .htaccess をそのまま使用。
 if [ -f "$HTACCESS_SRC" ]; then
-    echo "Custom .htaccess source found at $HTACCESS_SRC"
-    cp "$HTACCESS_SRC" "$HTACCESS_DEST"
+    echo "Custom .htaccess source found at $HTACCESS_SRC; copying to $APP_SRC/.htaccess"
+    cp "$HTACCESS_SRC" "$APP_SRC/.htaccess"
+    chown www-data:www-data "$APP_SRC/.htaccess"
+    chmod 644 "$APP_SRC/.htaccess"
 else
-    echo "No custom .htaccess source; creating empty .htaccess in $HTACCESS_DEST"
-    touch "$HTACCESS_DEST"
+    echo "No custom .htaccess; using Matomo default at $APP_SRC/.htaccess"
 fi
-chown www-data:www-data "$HTACCESS_DEST"
-chmod 644 "$HTACCESS_DEST"
 
 # actual_uid=0 はローカルディスク環境（CI など）: chown が有効なので再帰実行
 # actual_uid!=0 は Azure Files 環境: UID remap 済みで chown は SMB no-op のためスキップ
 if [ "$actual_uid" -eq 0 ]; then
     chown -R www-data:www-data "$PERSIST_ROOT"
 fi
-chown www-data:www-data "$WEBROOT"
 chown www-data:www-data "$APP_SRC"
 
 # ===== SSHD の準備（ホスト鍵生成 + 起動） =====

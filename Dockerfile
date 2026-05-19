@@ -63,13 +63,13 @@ RUN a2enmod rewrite
 RUN echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf \
     && a2enconf servername
 
-# ==== 000-default.conf を上書き（VirtualHost 内に Directory 設定） ====
-# global conf-available の <Directory> は VirtualHost スコープの同一設定より優先度が低い。
-# FollowSymLinks を確実に有効にするため、VirtualHost 内で明示的に設定する。
+# ==== DocumentRoot を /usr/src/matomo に設定 ====
+# /var/www/html -> /usr/src/matomo の二重 symlink を排除。
+# index.php などの主要ファイルは実ファイルとして直接参照されるため AH00037 が発生しない。
 RUN { \
         echo '<VirtualHost *:80>'; \
-        echo '    DocumentRoot /var/www/html'; \
-        echo '    <Directory /var/www/html>'; \
+        echo '    DocumentRoot /usr/src/matomo'; \
+        echo '    <Directory /usr/src/matomo>'; \
         echo '        Options FollowSymLinks'; \
         echo '        AllowOverride All'; \
         echo '        Require all granted'; \
@@ -79,17 +79,24 @@ RUN { \
         echo '</VirtualHost>'; \
     } > /etc/apache2/sites-available/000-default.conf
 
-# ==== /usr/src/matomo へのアクセス許可（symlink target が Require all denied になるのを回避） ====
-# Debian apache2.conf の <Directory /> は Require all denied のため、
-# symlink 解決先の /usr/src/matomo/ を明示的に Require all granted する。
+# ==== symlink 先ディレクトリへのアクセス許可 ====
+# /usr/src/matomo/config   -> /home/matomo-data/config
+# /usr/src/matomo/plugins  -> /home/matomo-data/plugins
+# /usr/src/matomo/matomo.js -> /home/matomo-data/matomo-js/matomo.js
+# /usr/src/matomo/tmp      -> /tmp/matomo-tmp
 RUN { \
-        echo '<Directory /usr/src/matomo>'; \
+        echo '<Directory /home/matomo-data>'; \
         echo '    Options FollowSymLinks'; \
         echo '    AllowOverride None'; \
         echo '    Require all granted'; \
         echo '</Directory>'; \
-    } > /etc/apache2/conf-available/matomo-src.conf \
-    && a2enconf matomo-src
+        echo '<Directory /tmp/matomo-tmp>'; \
+        echo '    Options FollowSymLinks'; \
+        echo '    AllowOverride None'; \
+        echo '    Require all granted'; \
+        echo '</Directory>'; \
+    } > /etc/apache2/conf-available/matomo-paths.conf \
+    && a2enconf matomo-paths
 
 # ==== PHP Opcache の推奨設定 ====
 RUN { \
@@ -133,8 +140,7 @@ COPY sshd_config /etc/ssh/sshd_config
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-# php:apache のデフォルト WORKDIR は /var/www/html
-WORKDIR /var/www/html
+WORKDIR /usr/src/matomo
 
 # App Service 側で /home を Azure Files にマウントし、
 # /home/matomo 以下に config / tmp / plugins / matomo.js を永続化する想定
