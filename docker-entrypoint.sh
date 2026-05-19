@@ -39,10 +39,7 @@ APP_SRC="/usr/src/matomo"
 # Azure Files を /home にマウントし、その中の /home/matomo-data を永続データ置き場にする
 PERSIST_ROOT="/home/matomo-data"
 
-# 旧: /matomo_htaccess/.htaccess から読み込む想定だったソース（ある場合は初期化に利用）
 HTACCESS_SRC="/matomo_htaccess/.htaccess"
-HTACCESS_PERSIST_DIR="$PERSIST_ROOT/htaccess"
-HTACCESS_PERSIST="$HTACCESS_PERSIST_DIR/.htaccess"
 HTACCESS_DEST="$WEBROOT/.htaccess"
 
 mkdir -p "$WEBROOT"
@@ -203,33 +200,21 @@ else
     echo "Warning: $APP_SRC does not exist. Matomo source not found."
 fi
 
-# ===== .htaccess のリンク設定 =====
-# Matomo 同梱の .htaccess は Options FollowSymLinks を無効化するため使用しない。
-# 空ファイルを用意して Apache がデフォルトの FollowSymLinks を維持できるようにする。
-# カスタム .htaccess が必要な場合は HTACCESS_SRC (/matomo_htaccess/.htaccess) で提供する。
-mkdir -p "$HTACCESS_PERSIST_DIR"
-chmod 755 "$HTACCESS_PERSIST_DIR"
-
+# ===== .htaccess の設定 =====
+# Azure Files 経由のシンボリックリンクは CI / Azure 両環境でパーミッション問題が発生するため、
+# /var/www/html に直接実ファイルとして作成する。
+# カスタム .htaccess が必要な場合は HTACCESS_SRC (/matomo_htaccess/.htaccess) をボリュームマウントで提供する。
+# APP_SRC ループが作成した /usr/src/matomo/.htaccess へのシンボリックリンクは実ファイルで上書きする。
+rm -f "$HTACCESS_DEST"
 if [ -f "$HTACCESS_SRC" ]; then
     echo "Custom .htaccess source found at $HTACCESS_SRC"
-    if [ ! -f "$HTACCESS_PERSIST" ]; then
-        echo "Initializing persistent .htaccess at $HTACCESS_PERSIST from $HTACCESS_SRC ..."
-        cp "$HTACCESS_SRC" "$HTACCESS_PERSIST"
-    fi
+    cp "$HTACCESS_SRC" "$HTACCESS_DEST"
 else
-    echo "No custom .htaccess source; creating empty .htaccess"
-    if [ ! -f "$HTACCESS_PERSIST" ]; then
-        touch "$HTACCESS_PERSIST"
-    fi
+    echo "No custom .htaccess source; creating empty .htaccess in $HTACCESS_DEST"
+    touch "$HTACCESS_DEST"
 fi
-
-# umask に関わらず Apache (www-data) が読めるよう明示的に権限を設定
-chmod 644 "$HTACCESS_PERSIST"
-
-if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
-    rm -f "$HTACCESS_DEST"
-fi
-ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
+chown www-data:www-data "$HTACCESS_DEST"
+chmod 644 "$HTACCESS_DEST"
 
 # actual_uid=0 はローカルディスク環境（CI など）: chown が有効なので再帰実行
 # actual_uid!=0 は Azure Files 環境: UID remap 済みで chown は SMB no-op のためスキップ
