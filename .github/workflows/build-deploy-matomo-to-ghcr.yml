@@ -74,6 +74,22 @@ jobs:
             fi
           done
 
+      # Apache 設定ダンプ（デバッグ用：実際に有効な設定を確認）
+      - name: Dump Apache effective config
+        run: |
+          echo "===== apache2ctl -t (syntax check) ====="
+          docker run --rm matomo-test:${{ github.sha }} apache2ctl -t 2>&1 || true
+          echo "===== apache2ctl -t -D DUMP_CONFIG ====="
+          docker run --rm matomo-test:${{ github.sha }} apache2ctl -t -D DUMP_CONFIG 2>&1 | head -300 || true
+          echo "===== /etc/apache2/sites-enabled/ ====="
+          docker run --rm matomo-test:${{ github.sha }} ls -la /etc/apache2/sites-enabled/ || true
+          echo "===== /etc/apache2/conf-enabled/ ====="
+          docker run --rm matomo-test:${{ github.sha }} ls -la /etc/apache2/conf-enabled/ || true
+          echo "===== 000-default.conf ====="
+          docker run --rm matomo-test:${{ github.sha }} cat /etc/apache2/sites-available/000-default.conf || true
+          echo "===== matomo-src.conf ====="
+          docker run --rm matomo-test:${{ github.sha }} cat /etc/apache2/conf-available/matomo-src.conf || true
+
       # 超簡易 HTTP スモークテスト
       - name: HTTP smoke test (apache + matomo)
         run: |
@@ -87,6 +103,9 @@ jobs:
           # Matomo の起動が重ければ増やす
           sleep 40
 
+          echo "===== Container logs (after startup) ====="
+          docker logs matomo-http-test 2>&1 || true
+
           echo "Requesting http://localhost:8080/ ..."
           http_status=$(curl -sS -o /tmp/index.html -w "%{http_code}" http://localhost:8080/ || echo "000")
           echo "HTTP status: $http_status"
@@ -95,8 +114,14 @@ jobs:
             echo "ERROR: Expected HTTP 200 but got $http_status"
             echo "===== /tmp/index.html (if any) ====="
             cat /tmp/index.html || true
-            echo "===== Container logs ====="
-            docker logs matomo-http-test || true
+            echo "===== Container logs (full) ====="
+            docker logs matomo-http-test 2>&1 || true
+            echo "===== /var/www/html directory listing ====="
+            docker exec matomo-http-test ls -la /var/www/html/ || true
+            echo "===== /usr/src/matomo directory listing ====="
+            docker exec matomo-http-test ls -la /usr/src/matomo/ || true
+            echo "===== Apache error log ====="
+            docker exec matomo-http-test cat /var/log/apache2/error.log 2>/dev/null | tail -50 || true
             docker rm -f matomo-http-test || true
             exit 1
           fi
@@ -109,9 +134,6 @@ jobs:
 
           echo "===== /tmp/index.html (head) ====="
           head -n 50 /tmp/index.html || true
-
-          echo "===== Container logs ====="
-          docker logs matomo-http-test || true
 
           docker rm -f matomo-http-test || true
 

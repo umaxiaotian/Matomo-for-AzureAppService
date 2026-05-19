@@ -63,24 +63,33 @@ RUN a2enmod rewrite
 RUN echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf \
     && a2enconf servername
 
-# ==== Matomo 用 Apache Directory 設定 ====
-# /var/www/html はシンボリックリンク構成。FollowSymLinks を明示する。
-# シンボリックリンクの実体は /usr/src/matomo/ に置かれるが、Debian の apache2.conf にある
-# <Directory /> の Require all denied がドキュメントルート外へのアクセスを拒否するため、
-# /usr/src/matomo/ を明示的に Require all granted する必要がある。
+# ==== 000-default.conf を上書き（VirtualHost 内に Directory 設定） ====
+# global conf-available の <Directory> は VirtualHost スコープの同一設定より優先度が低い。
+# FollowSymLinks を確実に有効にするため、VirtualHost 内で明示的に設定する。
+RUN { \
+        echo '<VirtualHost *:80>'; \
+        echo '    DocumentRoot /var/www/html'; \
+        echo '    <Directory /var/www/html>'; \
+        echo '        Options FollowSymLinks'; \
+        echo '        AllowOverride All'; \
+        echo '        Require all granted'; \
+        echo '    </Directory>'; \
+        echo '    ErrorLog ${APACHE_LOG_DIR}/error.log'; \
+        echo '    CustomLog ${APACHE_LOG_DIR}/access.log combined'; \
+        echo '</VirtualHost>'; \
+    } > /etc/apache2/sites-available/000-default.conf
+
+# ==== /usr/src/matomo へのアクセス許可（symlink target が Require all denied になるのを回避） ====
+# Debian apache2.conf の <Directory /> は Require all denied のため、
+# symlink 解決先の /usr/src/matomo/ を明示的に Require all granted する。
 RUN { \
         echo '<Directory /usr/src/matomo>'; \
         echo '    Options FollowSymLinks'; \
         echo '    AllowOverride None'; \
         echo '    Require all granted'; \
         echo '</Directory>'; \
-        echo '<Directory /var/www/html>'; \
-        echo '    Options FollowSymLinks'; \
-        echo '    AllowOverride All'; \
-        echo '    Require all granted'; \
-        echo '</Directory>'; \
-    } > /etc/apache2/conf-available/matomo-vhost.conf \
-    && a2enconf matomo-vhost
+    } > /etc/apache2/conf-available/matomo-src.conf \
+    && a2enconf matomo-src
 
 # ==== PHP Opcache の推奨設定 ====
 RUN { \
