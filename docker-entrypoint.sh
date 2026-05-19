@@ -226,9 +226,11 @@ if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
 fi
 ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
 
-# PERSIST_ROOT (Azure Files) への chown -R は SMB 上では no-op かつ全ファイル走査で遅いため不要
-# UID/GID は上のリマップ処理で Azure Files マウントオプションに合わせ済み
-# ローカルディレクトリのみ chown（再帰不要、シンボリックリンクの親だけ）
+# actual_uid=0 はローカルディスク環境（CI など）: chown が有効なので再帰実行
+# actual_uid!=0 は Azure Files 環境: UID remap 済みで chown は SMB no-op のためスキップ
+if [ "$actual_uid" -eq 0 ]; then
+    chown -R www-data:www-data "$PERSIST_ROOT"
+fi
 chown www-data:www-data "$WEBROOT"
 chown www-data:www-data "$APP_SRC"
 
