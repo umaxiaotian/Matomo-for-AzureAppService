@@ -78,30 +78,26 @@ else
 fi
 
 # ===== Matomo アプリ本体は /usr/src/matomo に保持し、
-#        config / tmp / plugins / matomo.js を /home/matomo-data 配下で永続化 =====
+#        config / plugins / matomo.js / logs を /home/matomo-data 配下で永続化
+#        tmp（cache/sessions 等）はローカルディスクに置いて高速化 =====
 if [ -d "$APP_SRC" ]; then
-    # 1) /home/matomo-data/config /tmp /plugins を実体として用意し、
+    # 1) /home/matomo-data/config /plugins を実体として用意し、
     #    /usr/src/matomo と /var/www/html の両方からシンボリックリンクで参照する
-    for dir in config tmp plugins; do
+    #    tmp は Azure Files ではなくローカルディスクに置く（後述）
+    for dir in config plugins; do
         src_app="$APP_SRC/$dir"
         dest="$PERSIST_ROOT/$dir"
         web_dir="$WEBROOT/$dir"
 
-        # 永続ディレクトリ初期化
-        if [ "$dir" = "tmp" ]; then
-            # tmp は空でOK（Matomo が勝手に使う）
-            [ -d "$dest" ] || mkdir -p "$dest"
-        else
-            # config / plugins はイメージから初回コピー（既に中身があればそのまま）
-            if [ ! -d "$dest" ] || [ -z "$(ls -A "$dest" 2>/dev/null || true)" ]; then
-                if [ -d "$src_app" ]; then
-                    echo "Initializing persistent $dir at $dest from $src_app ..."
-                    mkdir -p "$(dirname "$dest")"
-                    cp -a "$src_app" "$dest"
-                else
-                    echo "Creating empty persistent dir $dest ..."
-                    mkdir -p "$dest"
-                fi
+        # config / plugins はイメージから初回コピー（既に中身があればそのまま）
+        if [ ! -d "$dest" ] || [ -z "$(ls -A "$dest" 2>/dev/null || true)" ]; then
+            if [ -d "$src_app" ]; then
+                echo "Initializing persistent $dir at $dest from $src_app ..."
+                mkdir -p "$(dirname "$dest")"
+                cp -a "$src_app" "$dest"
+            else
+                echo "Creating empty persistent dir $dest ..."
+                mkdir -p "$dest"
             fi
         fi
 
@@ -137,21 +133,40 @@ if [ -d "$APP_SRC" ]; then
         chown -R www-data:www-data "$APP_SRC/js"
     fi
 
-    # 3) tmp 配下に assets などを書き込み可能ディレクトリとして用意
-    TMP_DEST="$PERSIST_ROOT/tmp"
-    if [ -d "$TMP_DEST" ]; then
-        mkdir -p \
-            "$TMP_DEST/assets" \
-            "$TMP_DEST/cache" \
-            "$TMP_DEST/logs" \
-            "$TMP_DEST/tcpdf" \
-            "$TMP_DEST/templates_c" \
-            "$TMP_DEST/feed" \
-            "$TMP_DEST/latest" \
-            "$TMP_DEST/climulti" \
-            "$TMP_DEST/sessions"
-        chmod -R 0775 "$TMP_DEST" || true
+    # 3) tmp はローカルディスクに置き、logs だけ Azure Files (永続) へシンボリックリンク
+    #    Azure Files 上の tmp は SMB レイテンシで遅いため、キャッシュ/セッション等をローカル化
+    LOCAL_TMP="/tmp/matomo-tmp"
+    LOGS_PERSIST="$PERSIST_ROOT/logs"
+
+    mkdir -p \
+        "$LOCAL_TMP/assets" \
+        "$LOCAL_TMP/cache" \
+        "$LOCAL_TMP/tcpdf" \
+        "$LOCAL_TMP/templates_c" \
+        "$LOCAL_TMP/feed" \
+        "$LOCAL_TMP/latest" \
+        "$LOCAL_TMP/climulti" \
+        "$LOCAL_TMP/sessions"
+
+    # logs のみ Azure Files 上に永続化してローカル tmp からリンク
+    mkdir -p "$LOGS_PERSIST"
+    ln -snf "$LOGS_PERSIST" "$LOCAL_TMP/logs"
+
+    chown -R www-data:www-data "$LOCAL_TMP"
+
+    # $APP_SRC/tmp → ローカル tmp
+    src_tmp="$APP_SRC/tmp"
+    if [ -e "$src_tmp" ] && [ ! -L "$src_tmp" ]; then
+        rm -rf "$src_tmp"
     fi
+    ln -snf "$LOCAL_TMP" "$src_tmp"
+
+    # $WEBROOT/tmp → ローカル tmp
+    web_tmp="$WEBROOT/tmp"
+    if [ -e "$web_tmp" ] && [ ! -L "$web_tmp" ]; then
+        rm -rf "$web_tmp"
+    fi
+    ln -snf "$LOCAL_TMP" "$web_tmp"
 
     # 4) matomo.js の永続化とシンボリックリンク設定
     JS_DIR="$PERSIST_ROOT/matomo-js"
@@ -211,9 +226,10 @@ if [ -e "$HTACCESS_DEST" ] && [ ! -L "$HTACCESS_DEST" ]; then
 fi
 ln -sf "$HTACCESS_PERSIST" "$HTACCESS_DEST"
 
-# 永続ディレクトリ・Web ルート・APP_SRC ディレクトリ自体の owner を www-data に
-# （APP_SRC 直下は js/ のみ再帰済み。ここでは親ディレクトリのみ）
-chown -R www-data:www-data "$PERSIST_ROOT" "$WEBROOT"
+# PERSIST_ROOT (Azure Files) への chown -R は SMB 上では no-op かつ全ファイル走査で遅いため不要
+# UID/GID は上のリマップ処理で Azure Files マウントオプションに合わせ済み
+# ローカルディレクトリのみ chown（再帰不要、シンボリックリンクの親だけ）
+chown www-data:www-data "$WEBROOT"
 chown www-data:www-data "$APP_SRC"
 
 # ===== SSHD の準備（ホスト鍵生成 + 起動） =====
