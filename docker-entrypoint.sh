@@ -76,14 +76,22 @@ fi
 #        config / plugins / matomo.js / logs を /home/matomo-data 配下で永続化
 #        tmp（cache/sessions 等）はローカルディスクに置いて高速化 =====
 if [ -d "$APP_SRC" ]; then
+    # バージョンマーカーを読んでアップグレード検出に使う
+    VERSION_FILE="$PERSIST_ROOT/.matomo_version"
+    if [ -f "$VERSION_FILE" ]; then
+        PERSISTED_VERSION="$(cat "$VERSION_FILE")"
+    else
+        PERSISTED_VERSION=""
+    fi
+
     # 1) config / plugins を /home/matomo-data 配下で永続化し、
     #    /usr/src/matomo/{config,plugins} から symlink で参照
     for dir in config plugins; do
         src_app="$APP_SRC/$dir"
         dest="$PERSIST_ROOT/$dir"
 
-        # config / plugins はイメージから初回コピー（既に中身があればそのまま）
         if [ ! -d "$dest" ] || [ -z "$(ls -A "$dest" 2>/dev/null || true)" ]; then
+            # 初回（空）: イメージからフルコピー
             if [ -d "$src_app" ]; then
                 echo "Initializing persistent $dir at $dest from $src_app ..."
                 mkdir -p "$(dirname "$dest")"
@@ -92,6 +100,11 @@ if [ -d "$APP_SRC" ]; then
                 echo "Creating empty persistent dir $dest ..."
                 mkdir -p "$dest"
             fi
+        elif [ "$dir" = "plugins" ] && [ "$PERSISTED_VERSION" != "$MATOMO_VERSION" ]; then
+            # バージョンアップ時: 組み込み plugins を image から同期
+            # ユーザーが追加したカスタムプラグインは削除しない（cp -a は上書き追加のみ）
+            echo "Matomo upgrade detected ($PERSISTED_VERSION -> $MATOMO_VERSION); syncing built-in plugins to $dest ..."
+            cp -a "$src_app/." "$dest/"
         fi
 
         # Matomo 本体側のディレクトリを永続ディレクトリへの symlink に差し替え
@@ -100,6 +113,9 @@ if [ -d "$APP_SRC" ]; then
         fi
         ln -snf "$dest" "$src_app"
     done
+
+    # バージョンマーカーを更新
+    echo "$MATOMO_VERSION" > "$VERSION_FILE"
 
     # js/ ディレクトリの所有者を www-data に設定（Matomo システムチェック要件）
     if [ -d "$APP_SRC/js" ]; then
