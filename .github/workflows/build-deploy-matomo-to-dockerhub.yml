@@ -136,10 +136,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Generate .env file
+        env:
+          MATOMO_VERSION: ${{ inputs.matomo_version }}
+          PHP_MEMORY_LIMIT: ${{ inputs.php_memory_limit }}
         run: |
           cat <<EOF > .env
-          MATOMO_VERSION=${{ inputs.matomo_version }}
-          PHP_MEMORY_LIMIT=${{ inputs.php_memory_limit }}
+          MATOMO_VERSION=$MATOMO_VERSION
+          PHP_MEMORY_LIMIT=$PHP_MEMORY_LIMIT
           EOF
           echo ".env generated:"
           cat .env
