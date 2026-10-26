@@ -1,4 +1,4 @@
-FROM php:8.4-apache
+FROM php:8.4.27-apache
 
 ARG MATOMO_VERSION
 ARG PHP_MEMORY_LIMIT
